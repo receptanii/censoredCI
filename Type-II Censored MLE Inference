@@ -1,0 +1,339 @@
+# censoredCI
+#Type-II Censored MLE Inference
+rm(list = ls())
+
+# ==============================================================================
+# --- REQUIRED LIBRARIES ---
+# ==============================================================================
+libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "MASS")
+
+new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
+if(length(new_libs)) install.packages(new_libs)
+
+invisible(lapply(libs, library, character.only = TRUE))
+
+# ==============================================================================
+# --- TYPE-II MLE CORE ENGINE ---
+# ==============================================================================
+
+sim_dist <- function(n, true_par, cdf_fun) {
+  u <- runif(n)
+
+  sapply(u, function(ui)
+    tryCatch(
+      uniroot(function(x) cdf_fun(x, true_par) - ui,
+              c(1e-7, 1e5))$root,
+      error = function(e) NA
+    )
+  )
+}
+
+run_opt <- function(m, nll, start, low, upp, iter, k) {
+
+  tryCatch({
+
+    sol <- switch(
+      m,
+
+      GA = GA::ga(
+        type = "real-valued",
+        fitness = function(p) -nll(p),
+        lower = low,
+        upper = upp,
+        maxiter = iter,
+        run = 30,
+        monitor = FALSE
+      )@solution[1, ],
+
+      DE = DEoptim::DEoptim(
+        fn = nll,
+        lower = low,
+        upper = upp,
+        control = DEoptim::DEoptim.control(
+          trace = FALSE,
+          itermax = iter
+        )
+      )$optim$bestmem,
+
+      PSO = pso::psoptim(
+        par = start,
+        fn = nll,
+        lower = low,
+        upper = upp,
+        control = list(maxit = iter)
+      )$par,
+
+      GWO = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "GWO",
+        max_iter = iter
+      )$Best_P,
+
+      WOA = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "WOA",
+        max_iter = iter
+      )$Best_P,
+
+      MFO = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "MFO",
+        max_iter = iter
+      )$Best_P,
+
+      SCA = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "SCA",
+        max_iter = iter
+      )$Best_P,
+
+      BA = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "BA",
+        max_iter = iter
+      )$Best_P,
+
+      BHO = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "BHO",
+        max_iter = iter
+      )$Best_P,
+
+      COA = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "COA",
+        max_iter = iter
+      )$Best_P,
+
+      CLG = metaheuristicOpt::metaheuristicOpt(
+        nll, k, low, upp, "CLG",
+        max_iter = iter
+      )$Best_P,
+
+      stop("Unknown optimizer")
+    )
+
+    optim(
+      par = sol,
+      fn = nll,
+      method = "BFGS",
+      hessian = TRUE
+    )
+
+  }, error = function(e) NULL)
+}
+
+# ==============================================================================
+# --- TYPE-II INFERENCE FUNCTION ---
+# ==============================================================================
+
+type2_inference <- function(x,
+                            par_start,
+                            pdf_f,
+                            cdf_f,
+                            r1,
+                            r2,
+                            censoring = "double",
+                            optimizer = "auto") {
+
+  # ============================================================================
+  # INPUT CHECKS
+  # ============================================================================
+
+  if(!is.numeric(x) || length(x) == 0)
+    stop("ERROR: 'x' must be a non-empty numeric vector.")
+
+  if(!is.numeric(par_start) || length(par_start) == 0)
+    stop("ERROR: 'par_start' must be a non-empty numeric vector.")
+
+  if(!is.function(pdf_f))
+    stop("ERROR: 'pdf_f' must be a function.")
+
+  if(!is.function(cdf_f))
+    stop("ERROR: 'cdf_f' must be a function.")
+
+  if(!is.numeric(r1) || r1 < 0 || r1 != floor(r1))
+    stop("ERROR: 'r1' must be a non-negative integer.")
+
+  if(!is.numeric(r2) || r2 < 0 || r2 != floor(r2))
+    stop("ERROR: 'r2' must be a non-negative integer.")
+
+  if(!censoring %in% c("left", "right", "double"))
+    stop("ERROR: 'censoring' must be one of 'left', 'right', or 'double'.")
+
+  x <- sort(na.omit(x))
+  n0 <- length(x)
+  k  <- length(par_start)
+
+  if(r1 + r2 >= n0)
+    stop("ERROR: r1 + r2 must be less than the total number of observations (r1 + r2 < n).")
+
+  if(censoring == "left" && r1 == 0)
+    warning("WARNING: censoring='left' selected but r1=0. No censoring is applied.")
+
+  if(censoring == "right" && r2 == 0)
+    warning("WARNING: censoring='right' selected but r2=0. No censoring is applied.")
+
+  if(censoring == "double" && r1 == 0 && r2 == 0)
+    warning("WARNING: censoring='double' selected but r1=0 and r2=0. No censoring is applied.")
+
+  if(any(x <= 0))
+    warning("WARNING: Data contains zero or negative values. This may cause issues for some distributions.")
+
+  if(n0 < 10)
+    warning("WARNING: Sample size is very small (n < 10). Estimates may not be reliable.")
+
+  if(length(par_start) == 1)
+    warning("WARNING: Single parameter distribution detected. Please verify 'par_start' is correct.")
+
+  # ============================================================================
+
+  idx <- switch(
+    censoring,
+    "left"   = (r1 + 1):n0,
+    "right"  = 1:(n0 - r2),
+    "double" = (r1 + 1):(n0 - r2)
+  )
+
+  nll <- function(par) {
+
+    p_exp <- exp(par)
+
+    eps <- 1e-12
+
+    dens <- pdf_f(x[idx], p_exp)
+
+    if(any(!is.finite(dens)) || any(dens <= 0)) {
+      return(1e10)
+    }
+
+    ll <- sum(log(pmax(dens, eps)))
+
+    if(r1 > 0 && censoring != "right") {
+
+      left_cdf <- cdf_f(x[r1 + 1], p_exp)
+
+      if(!is.finite(left_cdf) || left_cdf <= 0 || left_cdf >= 1) {
+        return(1e10)
+      }
+
+      ll <- ll + r1 * log(pmax(left_cdf, eps))
+    }
+
+    if(r2 > 0 && censoring != "left") {
+
+      right_surv <- 1 - cdf_f(x[n0 - r2], p_exp)
+
+      if(!is.finite(right_surv) || right_surv <= 0 || right_surv >= 1) {
+        return(1e10)
+      }
+
+      ll <- ll + r2 * log(pmax(right_surv, eps))
+    }
+
+    return(-ll)
+  }
+
+  methods <- if(optimizer == "auto")
+    c("GA", "DE", "PSO",
+      "GWO", "WOA", "MFO",
+      "SCA", "BA", "BHO",
+      "COA", "CLG")
+  else optimizer
+
+  best <- list(value = Inf)
+
+  all_results <- list()
+
+  for(m in methods) {
+
+    res <- run_opt(
+      m,
+      nll,
+      log(par_start),
+      rep(-10, k),
+      rep(10, k),
+      100,
+      k
+    )
+
+    if(!is.null(res) && is.finite(res$value)) {
+
+      all_results[[m]] <- data.frame(
+        Method = m,
+        NLL = round(res$value, 6),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    if(!is.null(res) &&
+       is.finite(res$value) &&
+       res$value < best$value) {
+
+      best <- res
+      best$method <- m
+    }
+  }
+
+  if(best$value == Inf) {
+    cat("No valid optimization result found.\n")
+    return(NULL)
+  }
+
+  # ============================================================================
+  # SAFE HESSIAN INVERSION
+  # ============================================================================
+
+  vcov_mat <- tryCatch(
+    solve(best$hessian),
+    error = function(e) {
+      warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      MASS::ginv(best$hessian)
+    }
+  )
+
+  se <- sqrt(abs(diag(vcov_mat)))
+
+  if(any(se > 10))
+    warning("WARNING: Some standard errors are very large. Estimates may not be reliable. Consider updating 'par_start'.")
+
+  if(optimizer == "auto" && length(all_results) > 0) {
+
+    comparison <- do.call(rbind, all_results)
+
+    comparison <- comparison[order(comparison$NLL), ]
+
+    rownames(comparison) <- NULL
+
+    cat("\n========================================\n")
+    cat("   ALL METHODS COMPARISON\n")
+    cat("========================================\n")
+
+    print(comparison)
+
+    cat("----------------------------------------\n")
+
+    cat(
+      ">>> Best method:",
+      best$method,
+      "| NLL:",
+      round(best$value, 6),
+      "\n"
+    )
+
+    cat("========================================\n\n")
+  }
+
+  list(
+
+    estimates = data.frame(
+      Parameter = paste0("par", 1:k),
+      Estimate  = exp(best$par),
+      Variance  = se^2,
+      StdError  = se,
+      CI_Lower  = exp(best$par - 1.96 * se),
+      CI_Upper  = exp(best$par + 1.96 * se)
+    ),
+
+    stats = c(
+      LogLik = -best$value,
+      AIC    = 2 * k + 2 * best$value,
+      BIC    = k * log(length(idx)) + 2 * best$value
+    ),
+
+    method = best$method
+  )
+}

@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- PROGRESSIVE FIRST TYPE-II CENSORING MLE INFERENCE ENGINE ---
+# --- PROGRESSIVE FIRST FAILURE CENSORING MLE INFERENCE ENGINE ---
 # ==============================================================================
 # Required libraries for the package:
 # GA, DEoptim, metaheuristicOpt, pso, numDeriv, MASS
@@ -9,7 +9,7 @@ new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
 if(length(new_libs)) install.packages(new_libs)
 invisible(lapply(libs, library, character.only = TRUE))
 
-#' Progressive First Censoring Scheme Generator
+#' Progressive First Failure Censoring Scheme Generator
 #' @export
 generate_first_scheme <- function(n, m, type = "first") {
   remainder <- n - m
@@ -21,7 +21,7 @@ generate_first_scheme <- function(n, m, type = "first") {
   diff(c(0, cuts, remainder + m - 1)) - 1
 }
 
-#' Progressive First Type-II MLE Engine
+#' Progressive First Failure MLE Engine
 #' @export
 progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
                                         opt_method = "auto", maxiter = 200) {
@@ -64,7 +64,7 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
   lb <- rep(-10, k)
   ub <- rep(10, k)
 
-  # --- Negative Progressive Log-Likelihood ---
+  # --- Negative Progressive First Failure Log-Likelihood ---
   nll <- function(par) {
     theta <- exp(par)
     f <- pmax(pdf_f(x_obs, theta), eps)
@@ -132,11 +132,11 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
     comparison <- comparison[order(comparison$NLL), ]
     rownames(comparison) <- NULL
     cat("\n========================================\n")
-    cat("   TUM YONTEMLERIN KARSILASTIRMASI\n")
+    cat("   ALL METHODS COMPARISON\n")
     cat("========================================\n")
     print(comparison)
     cat("----------------------------------------\n")
-    cat(">>> En iyi yontem:", best_res$method,
+    cat(">>> Best method:", best_res$method,
         "| NLL:", round(best_res$value, 6), "\n")
     cat("========================================\n\n")
   }
@@ -172,3 +172,39 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
     optimizer = best_res$method
   ))
 }
+
+# ==============================================================================
+# --- USER SECTION ---
+# ==============================================================================
+
+my_pdf <- function(x, par) {
+  lambda <- par[1]
+  k <- par[2]
+  (k / lambda) * (x / lambda)^(k - 1) * exp(-(x / lambda)^k)
+}
+
+my_cdf <- function(x, par) {
+  lambda <- par[1]
+  k <- par[2]
+  1 - exp(-(x / lambda)^k)
+}
+
+my_data <- c(0.030, 0.493, 0.855, 1.184, 1.283, 1.480, 1.776, 2.138, 2.5, 2.763,
+             2.993, 3.224, 3.421, 4.178, 4.441, 5.691, 5.855, 6.941, 6.941, 7.993,
+             8.882, 8.882, 9.145, 11.480, 11.513, 12.105, 12.796, 12.993, 13.849, 16.612,
+             17.138, 20.066, 20.329, 22.368, 26.776, 28.717, 28.717, 32.928, 33.783, 34.211,
+             34.770, 39.539, 41.118, 45.033, 46.053, 46.941, 48.289, 57.401, 58.322, 60.625)
+
+n <- length(my_data)
+R <- c(22, rep(0, n - 1))
+
+result <- progressive_first_inference(
+  x_obs      = my_data,
+  R          = R,
+  par_start  = c(20, 1),
+  pdf_f      = my_pdf,
+  cdf_f      = my_cdf,
+  opt_method = "auto"
+)
+
+print(result)

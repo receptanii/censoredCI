@@ -1,0 +1,174 @@
+# ==============================================================================
+# --- PROGRESSIVE FIRST TYPE-II CENSORING MLE INFERENCE ENGINE ---
+# ==============================================================================
+# Required libraries for the package:
+# GA, DEoptim, metaheuristicOpt, pso, numDeriv, MASS
+
+libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "numDeriv", "MASS")
+new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
+if(length(new_libs)) install.packages(new_libs)
+invisible(lapply(libs, library, character.only = TRUE))
+
+#' Progressive First Censoring Scheme Generator
+#' @export
+generate_first_scheme <- function(n, m, type = "first") {
+  remainder <- n - m
+  if (type == "first") return(c(remainder, rep(0, m - 1)))
+  if (type == "last")  return(c(rep(0, m - 1), remainder))
+  if (remainder == 0 || m == 1) return(rep(0, m))
+
+  cuts <- sort(sample(1:(remainder + m - 1), m - 1))
+  diff(c(0, cuts, remainder + m - 1)) - 1
+}
+
+#' Progressive First Type-II MLE Engine
+#' @export
+progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
+                                        opt_method = "auto", maxiter = 200) {
+
+  # ============================================================================
+  # INPUT CHECKS
+  # ============================================================================
+
+  if(!is.numeric(x_obs) || length(x_obs) == 0)
+    stop("ERROR: 'x_obs' must be a non-empty numeric vector.")
+
+  if(!is.numeric(par_start) || length(par_start) == 0)
+    stop("ERROR: 'par_start' must be a non-empty numeric vector.")
+
+  if(!is.function(pdf_f))
+    stop("ERROR: 'pdf_f' must be a function.")
+
+  if(!is.function(cdf_f))
+    stop("ERROR: 'cdf_f' must be a function.")
+
+  if(!is.numeric(R) || length(R) != length(x_obs) || any(R < 0) || any(R != floor(R)))
+    stop("ERROR: 'R' must be a non-negative integer vector of the same length as 'x_obs'.")
+
+  if(sum(R) >= length(x_obs))
+    stop("ERROR: sum(R) must be less than the total number of observations.")
+
+  if(any(x_obs <= 0))
+    warning("WARNING: Data contains zero or negative values. This may cause issues for some distributions.")
+
+  if(length(x_obs) < 10)
+    warning("WARNING: Sample size is very small (n < 10). Estimates may not be reliable.")
+
+  if(length(par_start) == 1)
+    warning("WARNING: Single parameter distribution detected. Please verify 'par_start' is correct.")
+
+  # ============================================================================
+
+  k <- length(par_start)
+  eps <- 1e-12
+  lb <- rep(-10, k)
+  ub <- rep(10, k)
+
+  # --- Negative Progressive Log-Likelihood ---
+  nll <- function(par) {
+    theta <- exp(par)
+    f <- pmax(pdf_f(x_obs, theta), eps)
+    S <- pmax(1 - cdf_f(x_obs, theta), eps)
+
+    ll <- sum(log(f)) + sum(R * log(S))
+
+    if (!is.finite(ll)) return(1e12)
+    return(-ll)
+  }
+
+  # --- Optimization Runner ---
+  run_opt <- function(method) {
+    tryCatch({
+      sol <- if (method %in% c("BFGS", "Nelder-Mead")) log(par_start) else {
+        switch(method,
+               GA  = GA::ga("real-valued", function(p) -nll(p), lb, ub,
+                            maxiter = maxiter, monitor = FALSE)@solution[1,],
+               DE  = DEoptim::DEoptim(nll, lb, ub,
+                                      DEoptim::DEoptim.control(trace = FALSE, itermax = maxiter))$optim$bestmem,
+               PSO = pso::psoptim(log(par_start), nll, lower = lb, upper = ub,
+                                  control = list(maxit = maxiter))$par,
+               metaheuristicOpt::metaheuristicOpt(nll, k, lb, ub, method, max_iter = maxiter)$Best_P
+        )
+      }
+
+      if (k == 1) optim(sol, nll, method = "Brent", lower = lb[1], upper = ub[1], hessian = TRUE)
+      else        optim(sol, nll, method = "BFGS", hessian = TRUE)
+
+    }, error = function(e) NULL)
+  }
+
+  # --- Decision Logic ---
+  methods_to_try <- if (opt_method == "auto")
+    c("BFGS", "GA", "DE", "PSO",
+      "GWO", "WOA", "MFO", "SCA",
+      "BA",  "BHO", "COA", "CLG")
+  else opt_method
+
+  best_res    <- list(value = Inf)
+  all_results <- list()
+
+  for (m in methods_to_try) {
+    res <- run_opt(m)
+
+    if (!is.null(res) && is.finite(res$value)) {
+      all_results[[m]] <- data.frame(
+        Method = m,
+        NLL    = round(res$value, 6),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    if (!is.null(res) && is.finite(res$value) && res$value < best_res$value) {
+      best_res <- res
+      best_res$method <- m
+    }
+  }
+
+  if (best_res$value == Inf) stop("Optimization failed across all methods.")
+
+  # --- Comparison Table ---
+  if (opt_method == "auto" && length(all_results) > 0) {
+    comparison <- do.call(rbind, all_results)
+    comparison <- comparison[order(comparison$NLL), ]
+    rownames(comparison) <- NULL
+    cat("\n========================================\n")
+    cat("   TUM YONTEMLERIN KARSILASTIRMASI\n")
+    cat("========================================\n")
+    print(comparison)
+    cat("----------------------------------------\n")
+    cat(">>> En iyi yontem:", best_res$method,
+        "| NLL:", round(best_res$value, 6), "\n")
+    cat("========================================\n\n")
+  }
+
+  # --- Result Formatting ---
+  vcov_matrix <- tryCatch(
+    solve(best_res$hessian),
+    error = function(e) {
+      warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      MASS::ginv(best_res$hessian)
+    }
+  )
+
+  se <- sqrt(abs(diag(vcov_matrix)))
+
+  if(any(se > 10))
+    warning("WARNING: Some standard errors are very large. Estimates may not be reliable. Consider updating 'par_start'.")
+
+  return(list(
+    estimates = data.frame(
+      Parameter = paste0("par", 1:k),
+      Estimate  = exp(best_res$par),
+      Variance  = se^2,
+      StdError  = se,
+      CI_Lower  = exp(best_res$par - 1.96 * se),
+      CI_Upper  = exp(best_res$par + 1.96 * se)
+    ),
+    stats = c(
+      LogLik = -best_res$value,
+      AIC    = 2 * k + 2 * best_res$value,
+      BIC    = k * log(length(x_obs)) + 2 * best_res$value
+    ),
+    optimizer = best_res$method
+  ))
+}

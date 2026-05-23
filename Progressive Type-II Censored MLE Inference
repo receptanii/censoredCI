@@ -1,3 +1,15 @@
+#' @importFrom stats na.omit optim runif uniroot
+#' @import numDeriv
+#' @importFrom metaheuristicOpt metaOpt GWO WOA MFO SCA BA BHO
+NULL
+
+#' Progressive Censoring Scheme Generator
+#'
+#' @param n Total number of items.
+#' @param m Number of failures.
+#' @param type Type of scheme ("first", "last", or "random").
+#' @export
+
 # ==============================================================================
 # --- PROGRESSIVE TYPE-II CENSORING MLE INFERENCE ENGINE ---
 # ==============================================================================
@@ -7,7 +19,6 @@ new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
 if(length(new_libs)) install.packages(new_libs)
 invisible(lapply(libs, library, character.only = TRUE))
 
-#' Progressive Censoring Scheme Generator
 generate_scheme <- function(n, m, type = "random") {
   r <- n - m
   if (type == "first") return(c(r, rep(0, m - 1)))
@@ -19,12 +30,17 @@ generate_scheme <- function(n, m, type = "random") {
 }
 
 #' Progressive Type-II MLE Engine
+#'
+#' @param x_obs A numeric vector of observed data.
+#' @param R Censoring scheme vector.
+#' @param par_start A numeric vector of initial parameters.
+#' @param pdf_f The probability density function.
+#' @param cdf_f The cumulative distribution function.
+#' @param opt_method Optimization method to choose.
+#' @param maxiter Maximum number of iterations.
+#' @export
 progressive_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
                                   opt_method = "auto", maxiter = 200) {
-
-  # ============================================================================
-  # INPUT CHECKS
-  # ============================================================================
 
   if(!is.numeric(x_obs) || length(x_obs) == 0)
     stop("ERROR: 'x_obs' must be a non-empty numeric vector.")
@@ -53,14 +69,11 @@ progressive_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
   if(length(par_start) == 1)
     warning("WARNING: Single parameter distribution detected. Please verify 'par_start' is correct.")
 
-  # ============================================================================
-
   k <- length(par_start)
   eps <- 1e-12
   lb <- rep(-10, k)
   ub <- rep(10, k)
 
-  # --- Negative Log-Likelihood ---
   nll <- function(par) {
     th <- exp(par)
     f  <- pmax(pdf_f(x_obs, th), eps)
@@ -70,7 +83,6 @@ progressive_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
     return(-ll)
   }
 
-  # --- Core Optimizer Runner ---
   run_opt <- function(m) {
     tryCatch({
       sol <- if (m %in% c("BFGS", "Nelder-Mead")) log(par_start) else {
@@ -81,16 +93,21 @@ progressive_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
                                       DEoptim::DEoptim.control(trace = FALSE, itermax = maxiter))$optim$bestmem,
                PSO = pso::psoptim(log(par_start), nll, lower = lb, upper = ub,
                                   control = list(maxit = maxiter))$par,
-               metaheuristicOpt::metaheuristicOpt(nll, k, lb, ub, m, max_iter = maxiter)$Best_P
+               GWO = metaheuristicOpt::GWO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               WOA = metaheuristicOpt::WOA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               MFO = metaheuristicOpt::MFO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               SCA = metaheuristicOpt::SCA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               BA  = metaheuristicOpt::BA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               BHO = metaheuristicOpt::BHO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               metaheuristicOpt::metaOpt(nll, k, lb, ub, algorithm = m, max_iter = maxiter)$Best_P
         )
       }
-      if (k == 1) optim(sol, nll, method = "Brent", lower = lb[1], upper = ub[1], hessian = TRUE)
-      else        optim(sol, nll, method = "BFGS", hessian = TRUE)
+      if (k == 1) stats::optim(sol, nll, method = "Brent", lower = lb[1], upper = ub[1], hessian = TRUE)
+      else        stats::optim(sol, nll, method = "BFGS", hessian = TRUE)
 
     }, error = function(e) NULL)
   }
 
-  # --- Method Selection ---
   methods <- if (opt_method == "auto")
     c("BFGS", "GA", "DE", "PSO",
       "GWO", "WOA", "MFO", "SCA",
@@ -128,16 +145,15 @@ progressive_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
     cat("========================================\n")
     print(comparison)
     cat("----------------------------------------\n")
-    cat(">>> Best method:", best$method,
-        "| NLL:", round(best$value, 6), "\n")
+    cat(">>> Best method:", best$method, "| NLL:", round(best$value, 6), "\n")
     cat("========================================\n\n")
   }
 
-  # --- Statistical Inference ---
   vcov_mat <- tryCatch(
     solve(best$hessian),
     error = function(e) {
       warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      check_numderiv <- numDeriv::hessian
       MASS::ginv(best$hessian)
     }
   )

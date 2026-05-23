@@ -1,16 +1,23 @@
+#' @importFrom stats na.omit optim runif uniroot
+#' @import numDeriv
+#' @importFrom metaheuristicOpt metaOpt GWO WOA MFO SCA BA BHO
+NULL
+
+#' Progressive First Failure Censoring Scheme Generator
+#'
+#' @param n Total number of items.
+#' @param m Number of failures.
+#' @param type Type of scheme ("first", "last", or "random").
+#' @export
+
 # ==============================================================================
 # --- PROGRESSIVE FIRST FAILURE CENSORING MLE INFERENCE ENGINE ---
 # ==============================================================================
-# Required libraries for the package:
-# GA, DEoptim, metaheuristicOpt, pso, numDeriv, MASS
-
 libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "numDeriv", "MASS")
 new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
 if(length(new_libs)) install.packages(new_libs)
 invisible(lapply(libs, library, character.only = TRUE))
 
-#' Progressive First Failure Censoring Scheme Generator
-#' @export
 generate_first_scheme <- function(n, m, type = "first") {
   remainder <- n - m
   if (type == "first") return(c(remainder, rep(0, m - 1)))
@@ -22,6 +29,14 @@ generate_first_scheme <- function(n, m, type = "first") {
 }
 
 #' Progressive First Failure MLE Engine
+#'
+#' @param x_obs A numeric vector of observed data.
+#' @param R Censoring scheme vector.
+#' @param par_start A numeric vector of initial parameters.
+#' @param pdf_f The probability density function.
+#' @param cdf_f The cumulative distribution function.
+#' @param opt_method Optimization method to choose.
+#' @param maxiter Maximum number of iterations.
 #' @export
 progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
                                         opt_method = "auto", maxiter = 200) {
@@ -87,12 +102,18 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
                                       DEoptim::DEoptim.control(trace = FALSE, itermax = maxiter))$optim$bestmem,
                PSO = pso::psoptim(log(par_start), nll, lower = lb, upper = ub,
                                   control = list(maxit = maxiter))$par,
-               metaheuristicOpt::metaheuristicOpt(nll, k, lb, ub, method, max_iter = maxiter)$Best_P
+               GWO = metaheuristicOpt::GWO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               WOA = metaheuristicOpt::WOA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               MFO = metaheuristicOpt::MFO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               SCA = metaheuristicOpt::SCA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               BA  = metaheuristicOpt::BA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               BHO = metaheuristicOpt::BHO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               metaheuristicOpt::metaOpt(nll, k, lb, ub, algorithm = method, max_iter = maxiter)$Best_P
         )
       }
 
-      if (k == 1) optim(sol, nll, method = "Brent", lower = lb[1], upper = ub[1], hessian = TRUE)
-      else        optim(sol, nll, method = "BFGS", hessian = TRUE)
+      if (k == 1) stats::optim(sol, nll, method = "Brent", lower = lb[1], upper = ub[1], hessian = TRUE)
+      else        stats::optim(sol, nll, method = "BFGS", hessian = TRUE)
 
     }, error = function(e) NULL)
   }
@@ -104,7 +125,7 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
       "BA",  "BHO", "COA", "CLG")
   else opt_method
 
-  best_res    <- list(value = Inf)
+  best_res    = list(value = Inf)
   all_results <- list()
 
   for (m in methods_to_try) {
@@ -146,6 +167,7 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
     solve(best_res$hessian),
     error = function(e) {
       warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      check_numderiv <- numDeriv::hessian
       MASS::ginv(best_res$hessian)
     }
   )
@@ -172,39 +194,3 @@ progressive_first_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
     optimizer = best_res$method
   ))
 }
-
-# ==============================================================================
-# --- USER SECTION ---
-# ==============================================================================
-
-my_pdf <- function(x, par) {
-  lambda <- par[1]
-  k <- par[2]
-  (k / lambda) * (x / lambda)^(k - 1) * exp(-(x / lambda)^k)
-}
-
-my_cdf <- function(x, par) {
-  lambda <- par[1]
-  k <- par[2]
-  1 - exp(-(x / lambda)^k)
-}
-
-my_data <- c(0.030, 0.493, 0.855, 1.184, 1.283, 1.480, 1.776, 2.138, 2.5, 2.763,
-             2.993, 3.224, 3.421, 4.178, 4.441, 5.691, 5.855, 6.941, 6.941, 7.993,
-             8.882, 8.882, 9.145, 11.480, 11.513, 12.105, 12.796, 12.993, 13.849, 16.612,
-             17.138, 20.066, 20.329, 22.368, 26.776, 28.717, 28.717, 32.928, 33.783, 34.211,
-             34.770, 39.539, 41.118, 45.033, 46.053, 46.941, 48.289, 57.401, 58.322, 60.625)
-
-n <- length(my_data)
-R <- c(22, rep(0, n - 1))
-
-result <- progressive_first_inference(
-  x_obs      = my_data,
-  R          = R,
-  par_start  = c(20, 1),
-  pdf_f      = my_pdf,
-  cdf_f      = my_cdf,
-  opt_method = "auto"
-)
-
-print(result)

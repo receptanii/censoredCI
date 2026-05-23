@@ -1,11 +1,24 @@
-# censoredCI
-#Type-II Censored MLE Inference
-rm(list = ls())
+#' @importFrom stats na.omit optim runif uniroot
+#' @import numDeriv
+#' @importFrom metaheuristicOpt metaOpt GWO WOA MFO SCA BA BHO
+NULL
+
+#' Type-II Inference Function
+#'
+#' @param x A numeric vector of observations.
+#' @param par_start A numeric vector of initial parameters.
+#' @param pdf_f The probability density function.
+#' @param cdf_f The cumulative distribution function.
+#' @param r1 Number of left-censored items.
+#' @param r2 Number of right-censored items.
+#' @param censoring Type of censoring: "left", "right", or "double".
+#' @param optimizer Optimizer method to use.
+#' @export
 
 # ==============================================================================
 # --- REQUIRED LIBRARIES ---
 # ==============================================================================
-libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "MASS")
+libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "MASS", "numDeriv")
 
 new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
 if(length(new_libs)) install.packages(new_libs)
@@ -17,12 +30,12 @@ invisible(lapply(libs, library, character.only = TRUE))
 # ==============================================================================
 
 sim_dist <- function(n, true_par, cdf_fun) {
-  u <- runif(n)
+  u <- stats::runif(n)
 
   sapply(u, function(ui)
     tryCatch(
-      uniroot(function(x) cdf_fun(x, true_par) - ui,
-              c(1e-7, 1e5))$root,
+      stats::uniroot(function(x) cdf_fun(x, true_par) - ui,
+                     c(1e-7, 1e5))$root,
       error = function(e) NA
     )
   )
@@ -63,50 +76,19 @@ run_opt <- function(m, nll, start, low, upp, iter, k) {
         control = list(maxit = iter)
       )$par,
 
-      GWO = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "GWO",
-        max_iter = iter
-      )$Best_P,
-
-      WOA = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "WOA",
-        max_iter = iter
-      )$Best_P,
-
-      MFO = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "MFO",
-        max_iter = iter
-      )$Best_P,
-
-      SCA = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "SCA",
-        max_iter = iter
-      )$Best_P,
-
-      BA = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "BA",
-        max_iter = iter
-      )$Best_P,
-
-      BHO = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "BHO",
-        max_iter = iter
-      )$Best_P,
-
-      COA = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "COA",
-        max_iter = iter
-      )$Best_P,
-
-      CLG = metaheuristicOpt::metaheuristicOpt(
-        nll, k, low, upp, "CLG",
-        max_iter = iter
-      )$Best_P,
+      GWO = metaheuristicOpt::GWO(nll, k, low, upp, max_iter = iter)$Best_P,
+      WOA = metaheuristicOpt::WOA(nll, k, low, upp, max_iter = iter)$Best_P,
+      MFO = metaheuristicOpt::MFO(nll, k, low, upp, max_iter = iter)$Best_P,
+      SCA = metaheuristicOpt::SCA(nll, k, low, upp, max_iter = iter)$Best_P,
+      BA  = metaheuristicOpt::BA(nll, k, low, upp, max_iter = iter)$Best_P,
+      BHO = metaheuristicOpt::BHO(nll, k, low, upp, max_iter = iter)$Best_P,
+      COA = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "COA", max_iter = iter)$Best_P,
+      CLG = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "CLG", max_iter = iter)$Best_P,
 
       stop("Unknown optimizer")
     )
 
-    optim(
+    stats::optim(
       par = sol,
       fn = nll,
       method = "BFGS",
@@ -154,7 +136,7 @@ type2_inference <- function(x,
   if(!censoring %in% c("left", "right", "double"))
     stop("ERROR: 'censoring' must be one of 'left', 'right', or 'double'.")
 
-  x <- sort(na.omit(x))
+  x <- sort(stats::na.omit(x))
   n0 <- length(x)
   k  <- length(par_start)
 
@@ -281,6 +263,7 @@ type2_inference <- function(x,
     solve(best$hessian),
     error = function(e) {
       warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      check_numderiv <- numDeriv::hessian
       MASS::ginv(best$hessian)
     }
   )

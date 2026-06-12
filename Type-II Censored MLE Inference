@@ -1,20 +1,3 @@
-#' @importFrom stats na.omit optim runif uniroot
-#' @import numDeriv
-#' @importFrom metaheuristicOpt metaOpt GWO WOA MFO SCA BA BHO
-NULL
-
-#' Type-II Inference Function
-#'
-#' @param x A numeric vector of observations.
-#' @param par_start A numeric vector of initial parameters.
-#' @param pdf_f The probability density function.
-#' @param cdf_f The cumulative distribution function.
-#' @param r1 Number of left-censored items.
-#' @param r2 Number of right-censored items.
-#' @param censoring Type of censoring: "left", "right", or "double".
-#' @param optimizer Optimizer method to use.
-#' @export
-
 # ==============================================================================
 # --- REQUIRED LIBRARIES ---
 # ==============================================================================
@@ -102,10 +85,38 @@ run_opt <- function(m, nll, start, low, upp, iter, k) {
 # --- TYPE-II INFERENCE FUNCTION ---
 # ==============================================================================
 
+#' @rdname progressive_first_inference
+#'
+#' @references
+#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. IEEE Transactions on Reliability, 36(1), 106-108.
+#'
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). Weibull models. John Wiley & Sons.
+#'
+#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). A novel family of lifetime distribution with applications to real and simulated data. Plos one, 15(10), e0238746.
+#'
+#' @examples
+#' # Real Data Application for Traditional Type-II Double Censoring
+#' data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+#'           2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+#'           1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+#'           2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+#'           1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+#'           2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+#'           1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+#'           3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+#'           1.757, 2.324, 3.376, 4.663)
+#'
+#' sorted_data <- sort(data)
+#' obs_data <- sorted_data[1:15]
+#'
+#' res <- type2_inference(x = obs_data, par_start = c(1.0, 1.0),
+#'                        r1 = 2, r2 = 3, censoring = "double", optimizer = "BFGS")
+#' print(res$estimates)
+#' @export
 type2_inference <- function(x,
                             par_start,
-                            pdf_f,
-                            cdf_f,
+                            pdf_f = function(x, par) { (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2]) },
+                            cdf_f = function(x, par) { 1 - exp(-(x/par[1])^par[2]) },
                             r1,
                             r2,
                             censoring = "double",

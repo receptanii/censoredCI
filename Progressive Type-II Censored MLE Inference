@@ -1,15 +1,3 @@
-#' @importFrom stats na.omit optim runif uniroot
-#' @import numDeriv
-#' @importFrom metaheuristicOpt metaOpt GWO WOA MFO SCA BA BHO
-NULL
-
-#' Progressive Censoring Scheme Generator
-#'
-#' @param n Total number of items.
-#' @param m Number of failures.
-#' @param type Type of scheme ("first", "last", or "random").
-#' @export
-
 # ==============================================================================
 # --- PROGRESSIVE TYPE-II CENSORING MLE INFERENCE ENGINE ---
 # ==============================================================================
@@ -19,6 +7,13 @@ new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
 if(length(new_libs)) install.packages(new_libs)
 invisible(lapply(libs, library, character.only = TRUE))
 
+#' Generate Progressive Type-II Censoring Scheme
+#'
+#' @param n number of independent observations or total sample size.
+#' @param m number of completely observed failures.
+#' @param type type of censoring scheme placement ("first", "last", or "random").
+#' @return A numeric vector representing the progressive censoring scheme.
+#' @export
 generate_scheme <- function(n, m, type = "random") {
   r <- n - m
   if (type == "first") return(c(r, rep(0, m - 1)))
@@ -29,17 +24,39 @@ generate_scheme <- function(n, m, type = "random") {
   diff(c(0, cut, r + m - 1)) - 1
 }
 
-#' Progressive Type-II MLE Engine
+#' @rdname progressive_first_inference
 #'
-#' @param x_obs A numeric vector of observed data.
-#' @param R Censoring scheme vector.
-#' @param par_start A numeric vector of initial parameters.
-#' @param pdf_f The probability density function.
-#' @param cdf_f The cumulative distribution function.
-#' @param opt_method Optimization method to choose.
-#' @param maxiter Maximum number of iterations.
+#' @references
+#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. IEEE Transactions on Reliability, 36(1), 106-108.
+#'
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). Weibull models. John Wiley & Sons.
+#'
+#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). A novel family of lifetime distribution with applications to real and simulated data. Plos one, 15(10), e0238746.
+#'
+#' @examples
+#' # Real Data Application for Progressive Type-II Censoring
+#' data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+#'           2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+#'           1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+#'           2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+#'           1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+#'           2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+#'           1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+#'           3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+#'           1.757, 2.324, 3.376, 4.663)
+#'
+#' scheme <- generate_scheme(n = 20, m = 12, type = "random")
+#' sorted_data <- sort(data)
+#' obs_data <- sorted_data[1:12]
+#'
+#' res <- progressive_inference(x_obs = obs_data, R = scheme,
+#'                              par_start = c(1.0, 1.0), opt_method = "BFGS")
+#' print(res$estimates)
 #' @export
-progressive_inference <- function(x_obs, R, par_start, pdf_f, cdf_f,
+progressive_inference <- function(x_obs, R, par_start,
+                                  # ... (FONKSİYONUNUN KALAN GÖVDESİNE DOKUNMA, AYNEN DEVAM ETSİN)
+                                  pdf_f = function(x, par) { (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2]) },
+                                  cdf_f = function(x, par) { 1 - exp(-(x/par[1])^par[2]) },
                                   opt_method = "auto", maxiter = 200) {
 
   if(!is.numeric(x_obs) || length(x_obs) == 0)

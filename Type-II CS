@@ -1,5 +1,72 @@
 # ==============================================================================
-# --- REQUIRED LIBRARIES ---
+# --- TYPE-II INFERENCE FUNCTION ---
+# ==============================================================================
+
+#' Maximum Likelihood Estimation for Traditional Type-II Censoring Schemes
+#'
+#' @description
+#' `ttcs` Computes the Maximum Likelihood Estimates (MLE), variances,
+#' standard errors, and asymptotic 95\% confidence intervals for the parameters
+#' of any user-defined lifetime distribution under a Type-II Censoring scheme.
+#'
+#' @details
+#' The parameters are estimated by maximizing the censored log-likelihood function.
+#' To guarantee that the scale and shape parameters remain strictly positive during
+#' numerical optimization, the internal objective function optimizes the parameters
+#' on the log-scale and maps them back using the exponential function. Standard errors
+#' are derived from the numerical Hessian matrix evaluated at the joint MLEs.
+#'
+#' @param x A numeric vector containing the observed data points.
+#' @param par_start A numeric vector indicating the initial starting values for the parameters.
+#' @param pdf_f A user-defined R function that represents the analytical Probability Density Function (PDF).
+#' @param cdf_f A user-defined R function that represents the analytical Cumulative Distribution Function (CDF).
+#' @param r1 An integer specifying the number of left-censored observations (set to 0 if not left-censored).
+#' @param r2 An integer specifying the number of right-censored observations (set to 0 if not right-censored).
+#' @param censoring A character string defining the censoring architecture. Must be one of `"left"`, `"right"`, or `"double"`. Default is `"double"`.
+#' @param optimizer A character string selecting the optimization strategy. If set to `"auto"`, all available global metaheuristics are evaluated. Default is `"auto"`.
+#'
+#' @value
+#' A named `list` containing the following components:
+#' \item{estimates}{A \code{data.frame} containing the estimated parameter values (\code{Estimate}), asymptotic variances (\code{Variance}), standard errors (\code{StdError}), 95\% Wald-type confidence intervals (\code{CI_Lower}, \code{CI_Upper}), the name of the winning global algorithm (\code{Selected_Method}), as well as fit statistics (\code{LogLik}, \code{AIC}, \code{BIC}).}
+#' \item{stats}{A named numeric vector reporting the minimized Negative Log-Likelihood (\code{LogLik}), Akaike Information Criterion (\code{AIC}), and Bayesian Information Criterion (\code{BIC}).}
+#' \item{optimizer}{A character string returning the exact method name of the optimal chosen optimizer.}
+#'
+#' @importFrom GA ga
+#' @importFrom DEoptim DEoptim DEoptim.control
+#' @importFrom pso psoptim
+#' @importFrom MASS ginv
+#' @importFrom stats optim na.omit runif uniroot
+#'
+#' @examples
+#' # Example using a standard two-parameter Weibull distribution
+#' my_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481)
+#'
+#' # Define PDF and CDF in the User Section
+#' weibull_pdf <- function(x, par) {
+#'    (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+#' }
+#' weibull_cdf <- function(x, par) {
+#'    1 - exp(-(x/par[1])^par[2])
+#' }
+#'
+#' # Run the Type-II Censoring Inference
+#' result <- ttcs(x = my_data,
+#'                 par_start = c(1.0, 1.0),
+#'                 pdf_f = weibull_pdf,
+#'                 cdf_f = weibull_cdf,
+#'                 r1 = 1,
+#'                 r2 = 1,
+#'                 censoring = "double",
+#'                 optimizer = "auto")
+#'
+#' print(result$estimates)
+#'
+#' @export
+#'
+#'
+
+# ==============================================================================
+# --- TYPE-II CENSORING MLE INFERENCE
 # ==============================================================================
 libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "MASS", "numDeriv")
 
@@ -8,9 +75,6 @@ if(length(new_libs)) install.packages(new_libs)
 
 invisible(lapply(libs, library, character.only = TRUE))
 
-# ==============================================================================
-# --- TYPE-II MLE CORE ENGINE ---
-# ==============================================================================
 
 sim_dist <- function(n, true_par, cdf_fun) {
   u <- stats::runif(n)
@@ -55,7 +119,7 @@ run_opt <- function(m, nll, start, low, upp, iter, k) {
         par = start,
         fn = nll,
         lower = low,
-        upper = upp,
+        upper = ub,
         control = list(maxit = iter)
       )$par,
 
@@ -77,50 +141,17 @@ run_opt <- function(m, nll, start, low, upp, iter, k) {
       method = "BFGS",
       hessian = TRUE
     )
-
   }, error = function(e) NULL)
 }
 
-# ==============================================================================
-# --- TYPE-II INFERENCE FUNCTION ---
-# ==============================================================================
-
-#' @rdname progressive_first_inference
-#'
-#' @references
-#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. IEEE Transactions on Reliability, 36(1), 106-108.
-#'
-#' Murthy, D. P., Xie, M., & Jiang, R. (2004). Weibull models. John Wiley & Sons.
-#'
-#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). A novel family of lifetime distribution with applications to real and simulated data. Plos one, 15(10), e0238746.
-#'
-#' @examples
-#' # Real Data Application for Traditional Type-II Double Censoring
-#' data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
-#'           2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
-#'           1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
-#'           2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
-#'           1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
-#'           2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
-#'           1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
-#'           3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
-#'           1.757, 2.324, 3.376, 4.663)
-#'
-#' sorted_data <- sort(data)
-#' obs_data <- sorted_data[1:15]
-#'
-#' res <- type2_inference(x = obs_data, par_start = c(1.0, 1.0),
-#'                        r1 = 2, r2 = 3, censoring = "double", optimizer = "BFGS")
-#' print(res$estimates)
-#' @export
-type2_inference <- function(x,
-                            par_start,
-                            pdf_f = function(x, par) { (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2]) },
-                            cdf_f = function(x, par) { 1 - exp(-(x/par[1])^par[2]) },
-                            r1,
-                            r2,
-                            censoring = "double",
-                            optimizer = "auto") {
+ttcs <- function(x,
+                 par_start,
+                 pdf_f,
+                 cdf_f,
+                 r1,
+                 r2,
+                 censoring = "double",
+                 optimizer = "auto") {
 
   # ============================================================================
   # INPUT CHECKS
@@ -133,10 +164,10 @@ type2_inference <- function(x,
     stop("ERROR: 'par_start' must be a non-empty numeric vector.")
 
   if(!is.function(pdf_f))
-    stop("ERROR: 'pdf_f' must be a function.")
+    stop("ERROR: 'pdf_f' must be specified as a function.")
 
   if(!is.function(cdf_f))
-    stop("ERROR: 'cdf_f' must be a function.")
+    stop("ERROR: 'cdf_f' must be specified as a function.")
 
   if(!is.numeric(r1) || r1 < 0 || r1 != floor(r1))
     stop("ERROR: 'r1' must be a non-negative integer.")
@@ -149,7 +180,7 @@ type2_inference <- function(x,
 
   x <- sort(stats::na.omit(x))
   n0 <- length(x)
-  k  <- length(par_start)
+  k  = length(par_start)
 
   if(r1 + r2 >= n0)
     stop("ERROR: r1 + r2 must be less than the total number of observations (r1 + r2 < n).")
@@ -183,10 +214,8 @@ type2_inference <- function(x,
 
   nll <- function(par) {
 
-    p_exp <- exp(par)
-
+    p_exp <- par
     eps <- 1e-12
-
     dens <- pdf_f(x[idx], p_exp)
 
     if(any(!is.finite(dens)) || any(dens <= 0)) {
@@ -221,14 +250,10 @@ type2_inference <- function(x,
   }
 
   methods <- if(optimizer == "auto")
-    c("GA", "DE", "PSO",
-      "GWO", "WOA", "MFO",
-      "SCA", "BA", "BHO",
-      "COA", "CLG")
+    c("GA", "DE", "PSO", "GWO", "WOA", "MFO", "SCA", "BA", "BHO", "COA", "CLG")
   else optimizer
 
   best <- list(value = Inf)
-
   all_results <- list()
 
   for(m in methods) {
@@ -262,8 +287,7 @@ type2_inference <- function(x,
   }
 
   if(best$value == Inf) {
-    cat("No valid optimization result found.\n")
-    return(NULL)
+    stop("All optimizers failed to converge.")
   }
 
   # ============================================================================
@@ -274,7 +298,6 @@ type2_inference <- function(x,
     solve(best$hessian),
     error = function(e) {
       warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
-      check_numderiv <- numDeriv::hessian
       MASS::ginv(best$hessian)
     }
   )
@@ -287,47 +310,83 @@ type2_inference <- function(x,
   if(optimizer == "auto" && length(all_results) > 0) {
 
     comparison <- do.call(rbind, all_results)
-
     comparison <- comparison[order(comparison$NLL), ]
-
     rownames(comparison) <- NULL
 
     cat("\n========================================\n")
     cat("   ALL METHODS COMPARISON\n")
     cat("========================================\n")
-
     print(comparison)
-
     cat("----------------------------------------\n")
-
-    cat(
-      ">>> Best method:",
-      best$method,
-      "| NLL:",
-      round(best$value, 6),
-      "\n"
-    )
-
+    cat(">>> Best method:", best$method, "| NLL:", round(best$value, 6), "\n")
     cat("========================================\n\n")
   }
 
-  list(
+  # İstatistiksel değerleri önceden hesapla
+  calculated_loglik <- -best$value
+  calculated_aic <- 2 * k + 2 * best$value
+  calculated_bic <- k * log(length(idx)) + 2 * best$value
 
+  return(list(
     estimates = data.frame(
-      Parameter = paste0("par", 1:k),
-      Estimate  = exp(best$par),
-      Variance  = se^2,
-      StdError  = se,
-      CI_Lower  = exp(best$par - 1.96 * se),
-      CI_Upper  = exp(best$par + 1.96 * se)
+      Estimate        = best$par,
+      Variance        = se^2,
+      StdError        = se,
+      CI_Lower        = best$par - 1.96 * se,
+      CI_Upper        = best$par + 1.96 * se,
+      Selected_Method = best$method,
+      LogLik          = calculated_loglik,  # Log-Likelihood eklendi
+      stringsAsFactors = FALSE
     ),
 
     stats = c(
-      LogLik = -best$value,
-      AIC    = 2 * k + 2 * best$value,
-      BIC    = k * log(length(idx)) + 2 * best$value
+      LogLik = calculated_loglik
     ),
 
-    method = best$method
-  )
+    optimizer = best$method
+  ))
 }
+
+
+# ==============================================================================
+# --- USER SECTION ---
+# ==============================================================================
+
+# 1. Data Definition
+user_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+               2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+               1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+               2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+               1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+               2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+               1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+               3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+               1.757, 2.324, 3.376, 4.663)
+
+sorted_data <- sort(user_data)
+obs_data    <- sorted_data[1:15] # Subset of observed data to be analyzed
+
+# 2. Parameter Initial Values (Starting Points)
+user_par_start <- c(.2,.2)
+
+# 3. PDF and CDF Functions
+user_pdf <- function(x, par) {
+  (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+}
+
+user_cdf <- function(x, par) {
+  1 - exp(-(x/par[1])^par[2])
+}
+
+# --- EXECUTE INFERENCE ---
+res <- ttcs(x = obs_data,
+            par_start = user_par_start,
+            pdf_f = user_pdf,
+            cdf_f = user_cdf,
+            r1 = 2,
+            r2 = 3,
+            censoring = "double",
+            optimizer = "auto")
+
+# --- RESULTS OUTPUT ---
+print(res$estimates)

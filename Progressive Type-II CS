@@ -1,63 +1,38 @@
 # ==============================================================================
-# --- PROGRESSIVE TYPE-II CENSORING MLE INFERENCE ENGINE ---
+# --- PROGRESSIVE TYPE-II CENSORING MLE INFERENCE
 # ==============================================================================
-
-libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "numDeriv", "MASS")
-new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
-if(length(new_libs)) install.packages(new_libs)
-invisible(lapply(libs, library, character.only = TRUE))
-
-#' Generate Progressive Type-II Censoring Scheme
+#
+#' @title Progressive Type-II Censoring Maximum Likelihood Estimation Inference
 #'
-#' @param n number of independent observations or total sample size.
-#' @param m number of completely observed failures.
-#' @param type type of censoring scheme placement ("first", "last", or "random").
-#' @return A numeric vector representing the progressive censoring scheme.
-#' @export
-generate_scheme <- function(n, m, type = "random") {
-  r <- n - m
-  if (type == "first") return(c(r, rep(0, m - 1)))
-  if (type == "last")  return(c(rep(0, m - 1), r))
-  if (r == 0 || m == 1) return(rep(0, m))
-
-  cut <- sort(sample(1:(r + m - 1), m - 1))
-  diff(c(0, cut, r + m - 1)) - 1
-}
-
-#' @rdname progressive_first_inference
+#' @description `pttcs` computes the Maximum Likelihood Estimates (MLE), variances,
+#' standard errors, and asymptotic 95\% confidence intervals for the parameters
+#' of any user-defined lifetime distribution under a Progressive Type-II
+#' Censoring scheme.
+#'
+#' @param x_obs A numeric vector containing the completely observed failure times (ordered observations).
+#' @param R A non-negative integer vector specifying the progressive censoring scheme (number of units removed at each failure time). Must have the same length as \code{x_obs}.
+#' @param par_start A numeric vector of initial parameter values for the optimization process.
+#' @param pdf_f A user-defined function calculating the Probability Density Function (PDF) of the distribution. Must accept arguments \code{(x, par)}.
+#' @param cdf_f A user-defined function calculating the Cumulative Distribution Function (CDF) of the distribution. Must accept arguments \code{(x, par)}.
+#' @param opt_method A character string specifying the optimization method. Options include \code{"auto"} (runs all available algorithms), \code{"BFGS"}, \code{"GA"}, \code{"DE"}, \code{"PSO"}, etc. Default is \code{"auto"}.
+#' @param maxiter An integer indicating the maximum number of iterations or generations for the meta-heuristic optimizers. Default is \code{200}.
+#'
+#' @details The function transforms parameters into the logarithmic scale during optimization to ensure positivity constraints. Standard errors are computed using the inverse of the Hessian matrix, with a fallback to the Moore-Penrose pseudoinverse if inversion fails.
+#'
+#' @return A list containing three distinct components:
+#' \item{estimates}{A data frame displaying the estimated parameters, their variances, standard errors, 95\% asymptotic confidence intervals, the specific optimization method that yielded the best result, and fit statistics.}
+#' \item{stats}{A named numeric vector containing the maximized Log-Likelihood value (\code{LogLik}), Akaike Information Criterion (\code{AIC}), and Bayesian Information Criterion (\code{BIC}).}
+#' \item{optimizer}{A character string stating the name of the best-performing optimization algorithm.}
 #'
 #' @references
-#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. IEEE Transactions on Reliability, 36(1), 106-108.
+#' Aarset, M. V. (1987). Kuvvet tehlike orani nasil belirlenir. IEEE Guvenilirlik Konusundaki Islemler, 36(1), 106-108.
 #'
-#' Murthy, D. P., Xie, M., & Jiang, R. (2004). Weibull models. John Wiley & Sons.
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). Weibull modelleri. John Wiley & Sons.
 #'
-#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). A novel family of lifetime distribution with applications to real and simulated data. Plos one, 15(10), e0238746.
+#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). Gercek ve simule edilmis verilere uygulamalarla yasam boyu dagilimi alaninda yenilikci bir aile. Plos bir, 15(10), e0238746.
 #'
-#' @examples
-#' # Real Data Application for Progressive Type-II Censoring
-#' data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
-#'           2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
-#'           1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
-#'           2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
-#'           1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
-#'           2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
-#'           1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
-#'           3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
-#'           1.757, 2.324, 3.376, 4.663)
-#'
-#' scheme <- generate_scheme(n = 20, m = 12, type = "random")
-#' sorted_data <- sort(data)
-#' obs_data <- sorted_data[1:12]
-#'
-#' res <- progressive_inference(x_obs = obs_data, R = scheme,
-#'                              par_start = c(1.0, 1.0), opt_method = "BFGS")
-#' print(res$estimates)
 #' @export
-progressive_inference <- function(x_obs, R, par_start,
-                                  # ... (FONKSİYONUNUN KALAN GÖVDESİNE DOKUNMA, AYNEN DEVAM ETSİN)
-                                  pdf_f = function(x, par) { (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2]) },
-                                  cdf_f = function(x, par) { 1 - exp(-(x/par[1])^par[2]) },
-                                  opt_method = "auto", maxiter = 200) {
+pttcs <- function(x_obs, R, par_start, pdf_f, cdf_f, opt_method = "auto", maxiter = 200) {
 
   if(!is.numeric(x_obs) || length(x_obs) == 0)
     stop("ERROR: 'x_obs' must be a non-empty numeric vector.")
@@ -92,9 +67,9 @@ progressive_inference <- function(x_obs, R, par_start,
   ub <- rep(10, k)
 
   nll <- function(par) {
-    th <- exp(par)
-    f  <- pmax(pdf_f(x_obs, th), eps)
-    S  <- pmax(1 - cdf_f(x_obs, th), eps)
+    th <- par
+    f  = pmax(pdf_f(x_obs, th), eps)
+    S  = pmax(1 - cdf_f(x_obs, th), eps)
     ll <- sum(log(f)) + sum(R * log(S))
     if (!is.finite(ll)) return(1e12)
     return(-ll)
@@ -126,9 +101,7 @@ progressive_inference <- function(x_obs, R, par_start,
   }
 
   methods <- if (opt_method == "auto")
-    c("BFGS", "GA", "DE", "PSO",
-      "GWO", "WOA", "MFO", "SCA",
-      "BA",  "BHO", "COA", "CLG")
+    c("BFGS", "GA", "DE", "PSO", "GWO", "WOA", "MFO", "SCA", "BA", "BHO", "COA", "CLG")
   else opt_method
 
   best        <- list(value = Inf)
@@ -170,7 +143,6 @@ progressive_inference <- function(x_obs, R, par_start,
     solve(best$hessian),
     error = function(e) {
       warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
-      check_numderiv <- numDeriv::hessian
       MASS::ginv(best$hessian)
     }
   )
@@ -180,20 +152,67 @@ progressive_inference <- function(x_obs, R, par_start,
   if(any(se > 10))
     warning("WARNING: Some standard errors are very large. Estimates may not be reliable. Consider updating 'par_start'.")
 
+  # İstatistiksel kriterleri önceden hesapla
+  calc_loglik <- -best$value
+  calc_aic    <- 2 * k + 2 * best$value
+  calc_bic    <- k * log(length(x_obs)) + 2 * best$value
+
   return(list(
     estimates = data.frame(
-      Parameter = paste0("par", 1:k),
-      Estimate  = exp(best$par),
+      Estimate  = best$par,
       Variance  = se^2,
       StdError  = se,
-      CI_Lower  = exp(best$par - 1.96 * se),
-      CI_Upper  = exp(best$par + 1.96 * se)
+      CI_Lower  = best$par - 1.96 * se,
+      CI_Upper  = best$par + 1.96 * se,
+      Selected_Method = best$method,
+      LogLik    = calc_loglik,  # LogLik sütunu eklendi
+      stringsAsFactors = FALSE
     ),
     stats = c(
-      LogLik = -best$value,
-      AIC    = 2 * k + 2 * best$value,
-      BIC    = k * log(length(x_obs)) + 2 * best$value
+      LogLik = calc_loglik
     ),
     optimizer = best$method
   ))
 }
+
+# ==============================================================================
+# --- USER SECTION
+# ==============================================================================
+
+# 1. Data and Censoring Scheme Definition
+user_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+               2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+               1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+               2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+               1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+               2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+               1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+               3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+               1.757, 2.324, 3.376, 4.663)
+
+user_scheme <- c(2, 0, 1, 0, 0, 3, 0, 0, 1, 0, 1, 0)
+sorted_data <- sort(user_data)
+obs_data    <- sorted_data[1:12]
+
+# 2. Initial Parameter Values
+user_par_start <- c(2,3)
+
+# 3. Probability Distribution Functions (User-Defined PDF and CDF)
+user_pdf <- function(x, par) {
+  (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+}
+
+user_cdf <- function(x, par) {
+  1 - exp(-(x/par[1])^par[2])
+}
+
+# 4. Model Execution
+res <- pttcs(x_obs      = obs_data,
+             R          = user_scheme,
+             par_start  = user_par_start,
+             pdf_f      = user_pdf,
+             cdf_f      = user_cdf,
+             opt_method = "auto")
+
+# 5. Output Results
+print(res$estimates)

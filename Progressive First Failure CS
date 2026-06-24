@@ -1,106 +1,52 @@
 # ==============================================================================
-# --- PROGRESSIVE FIRST FAILURE CENSORING MLE INFERENCE ENGINE ---
+# --- PROGRESSIVE FIRST FAILURE CENSORING MLE INFERENCE ---
 # ==============================================================================
 libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "numDeriv", "MASS")
 new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
 if(length(new_libs)) install.packages(new_libs)
 invisible(lapply(libs, library, character.only = TRUE))
 
-#' Maximum Likelihood Estimation and Asymptotic Confidence Intervals under General and Progressive Censoring Schemes
+#' Maximum Likelihood Estimation under Progressive First-Failure Censoring
 #'
-#' @name progressive_first_inference
-#' @aliases generate_first_scheme progressive_first_inference progressive_inference type2_inference
+#' @description `pffcs` computes the Maximum Likelihood Estimates (MLE), variances,
+#' standard errors, and asymptotic 95\% confidence intervals for the parameters
+#' of any user-defined lifetime distribution under a Progressive First-Failure
+#' Censoring scheme.
 #'
-#' @description
-#' Provides a maximum likelihood estimation (MLE) framework and asymptotic confidence interval
-#' construction for distribution parameters under different censored lifetime models. The package
-#' supports traditional Type-II censoring layouts (including left, right, and double censoring schemes),
-#' progressive Type-II censored data, and progressive first-failure censored data. Parameter
-#' estimation can be performed using several modern metaheuristic optimization algorithms or traditional
-#' gradient-based methods.
+#' @param x_obs A numeric vector containing the completely observed failure times.
+#' @param R A numeric vector specifying the progressive censoring scheme (number of groups removed at each failure time).
+#' @param par_start A numeric vector of initial parameter values in standard space (transformed internally to log-space).
+#' @param pdf_f A user-defined function for the probability density function (PDF). Must accept arguments \code{(x, par)}.
+#' @param cdf_f A user-defined function for the cumulative distribution function (CDF). Must accept arguments \code{(x, par)}.
+#' @param opt_method A character string specifying the optimization algorithm. Default is \code{"auto"} to evaluate all available engines.
+#' @param maxiter An integer specifying the maximum number of iterations for metaheuristic search engines. Default is 200.
 #'
-#' @param n number of independent groups/gaskets in the life-test or the total sample size of observations.
-#' @param m number of completely observed failures.
-#' @param type type of censoring scheme placement. Options are "first", "last", or "random".
-#' @param x_obs vector of observed failure times under progressive or progressive first-failure censoring.
-#' @param x vector of independent complete data observations for traditional Type-II censoring.
-#' @param R progressive censoring scheme vector tracking the number of dropped units at each failure.
-#' @param par_start vector of initial distribution parameters (provided in standard space, optimized in log-space).
-#' @param pdf_f the analytical probability density function (PDF). Default is the two-parameter Weibull distribution.
-#' @param cdf_f the analytical cumulative distribution function (CDF). Default is the two-parameter Weibull distribution.
-#' @param opt_method optimization algorithm selection for progressive frameworks. Default is "auto".
-#' @param optimizer optimization algorithm selection for traditional Type-II framework. Default is "auto".
-#' @param maxiter maximum number of iterations for the metaheuristic engines.
-#' @param r1 integer tracking the number of left-censored counts.
-#' @param r2 integer tracking the number of right-censored counts.
-#' @param censoring choice of censoring architecture for Type-II layout ("left", "right", or "double").
+#' @details The function handles bounded parameter spaces by optimizing in log-space,
+#' automatically enforcing positivity constraints. When \code{opt_method = "auto"},
+#' it evaluates standard gradient-based methods alongside an array of global
+#' metaheuristic algorithms (GA, DE, PSO, GWO, WOA, MFO, SCA, BA, BHO) to bypass
+#' local extrema before conducting a final BFGS polish.
 #'
-#' @details
-#' This suite of functions offers robust computational tools to analyze survival data and reliability models
-#' under structural loss or planned censoring schemes. Optimization routines convert bounded parameters
-#' into log-space to enforce positivity constraints automatically. Available global metaheuristic search
-#' engines include Genetic Algorithm (GA), Differential Evolution (DE), Particle Swarm Optimization (PSO),
-#' Grey Wolf Optimizer (GWO), Whale Optimization Algorithm (WOA), Moth-Flame Optimization (MFO),
-#' Sine Cosine Algorithm (SCA), Bat Algorithm (BA), Black Hole Optimization (BHO), Cuckoo Optimization
-#' Algorithm (COA), and Clonal Selection Algorithm (CLG). Traditional gradient-based optimization
-#' (such as BFGS) is executed post-heuristics to ensure rapid convergence and accurate Hessian evaluation
-#' for standard error and confidence interval computations.
-#'
-#' @return A list containing the following components:
-#' - estimates: A data frame containing parameter names, maximum likelihood estimates, variances, standard errors, and 95 percent asymptotic confidence intervals (CI_Lower, CI_Upper).
-#' - stats: A numeric vector containing the optimized Log-Likelihood value, Akaike Information Criterion (AIC), and Bayesian Information Criterion (BIC).
-#' - optimizer: A character string indicating the name of the best-performing optimization algorithm.
+#' @return A named list containing three main components:
+#' \item{estimates}{A data frame with parameter names, MLE estimates, variances, standard errors, 95\% asymptotic confidence intervals, and fit statistics.}
+#' \item{stats}{A named numeric vector tracking the maximized Log-Likelihood, AIC, and BIC values.}
+#' \item{selected_optimizer}{A character string returning the name of the optimization routine that achieved the absolute lowest negative log-likelihood.}
 #'
 #' @references
-#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. IEEE Transactions on Reliability, 36(1), 106-108.
+#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. \emph{IEEE Transactions on Reliability}, 36(1), 106-108.
 #'
-#' Murthy, D. P., Xie, M., & Jiang, R. (2004). Weibull models. John Wiley & Sons.
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). \emph{Weibull models}. John Wiley & Sons.
 #'
-#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). A novel family of lifetime distribution with applications to real and simulated data. Plos one, 15(10), e0238746.
+#' @importFrom GA ga
+#' @importFrom DEoptim DEoptim DEoptim.control
+#' @importFrom pso psoptim
+#' @importFrom metaheuristicOpt GWO WOA MFO SCA BA BHO metaOpt
+#' @importFrom MASS ginv
+#' @importFrom stats optim
 #'
-#' @examples
-#' # Real Data Application using Aarset (1987) lifetime data
-#' data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
-#'           2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
-#'           1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
-#'           2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
-#'           1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
-#'           2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
-#'           1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
-#'           3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
-#'           1.757, 2.324, 3.376, 4.663)
-#'
-#' # Set up a mathematically valid scheme where sum(R) < length(x_obs)
-#' scheme <- generate_first_scheme(n = 20, m = 12, type = "first")
-#' sorted_data <- sort(data)
-#' obs_data <- sorted_data[1:12]
-#'
-#' res <- progressive_first_inference(x_obs = obs_data, R = scheme,
-#'                                     par_start = c(1.0, 1.0), opt_method = "BFGS")
-#' print(res$estimates)
-#' @import GA
-#' @import DEoptim
-#' @import metaheuristicOpt
-#' @import pso
-#' @import MASS
-#' @import numDeriv
+#' @return A list containing estimates, stats, and the best optimizer.
 #' @export
-generate_first_scheme <- function(n, m, type = "first") {
-  remainder <- n - m
-  if (type == "first") return(c(remainder, rep(0, m - 1)))
-  if (type == "last")  return(c(rep(0, m - 1), remainder))
-  if (remainder == 0 || m == 1) return(rep(0, m))
-
-  cuts <- sort(sample(1:(remainder + m - 1), m - 1))
-  diff(c(0, cuts, remainder + m - 1)) - 1
-}
-
-#' @rdname progressive_first_inference
-#' @export
-progressive_first_inference <- function(x_obs, R, par_start,
-                                        pdf_f = function(x, par) { (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2]) },
-                                        cdf_f = function(x, par) { 1 - exp(-(x/par[1])^par[2]) },
-                                        opt_method = "auto", maxiter = 200) {
+pffcs <- function(x_obs, R, par_start, pdf_f, cdf_f, opt_method = "auto", maxiter = 200) {
 
   # ============================================================================
   # INPUT CHECKS
@@ -142,7 +88,7 @@ progressive_first_inference <- function(x_obs, R, par_start,
 
   # --- Negative Progressive First Failure Log-Likelihood ---
   nll <- function(par) {
-    theta <- exp(par)
+    theta <- par
     f <- pmax(pdf_f(x_obs, theta), eps)
     S <- pmax(1 - cdf_f(x_obs, theta), eps)
 
@@ -181,9 +127,7 @@ progressive_first_inference <- function(x_obs, R, par_start,
 
   # --- Decision Logic ---
   methods_to_try <- if (opt_method == "auto")
-    c("BFGS", "GA", "DE", "PSO",
-      "GWO", "WOA", "MFO", "SCA",
-      "BA",  "BHO", "COA", "CLG")
+    c("BFGS", "GA", "DE", "PSO", "GWO", "WOA", "MFO", "SCA", "BA", "BHO", "COA", "CLG")
   else opt_method
 
   best_res    = list(value = Inf)
@@ -218,8 +162,7 @@ progressive_first_inference <- function(x_obs, R, par_start,
     cat("========================================\n")
     print(comparison)
     cat("----------------------------------------\n")
-    cat(">>> Best method:", best_res$method,
-        "| NLL:", round(best_res$value, 6), "\n")
+    cat(">>> Best method:", best_res$method, "| NLL:", round(best_res$value, 6), "\n")
     cat("========================================\n\n")
   }
 
@@ -228,7 +171,6 @@ progressive_first_inference <- function(x_obs, R, par_start,
     solve(best_res$hessian),
     error = function(e) {
       warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
-      check_numderiv <- numDeriv::hessian
       MASS::ginv(best_res$hessian)
     }
   )
@@ -238,20 +180,67 @@ progressive_first_inference <- function(x_obs, R, par_start,
   if(any(se > 10))
     warning("WARNING: Some standard errors are very large. Estimates may not be reliable. Consider updating 'par_start'.")
 
+  # İstatistiksel değerleri önceden hesapla
+  calc_loglik <- -best_res$value
+  calc_aic    <- 2 * k + 2 * best_res$value
+  calc_bic    <- k * log(length(x_obs)) + 2 * best_res$value
+
   return(list(
     estimates = data.frame(
-      Parameter = paste0("par", 1:k),
-      Estimate  = exp(best_res$par),
+      Estimate  = best_res$par,
       Variance  = se^2,
       StdError  = se,
-      CI_Lower  = exp(best_res$par - 1.96 * se),
-      CI_Upper  = exp(best_res$par + 1.96 * se)
+      CI_Lower  = best_res$par - 1.96 * se,
+      CI_Upper  = best_res$par + 1.96 * se,
+      Optimizer = best_res$method,
+      LogLik    = calc_loglik,  # LogLik sütunu eklendi
+      stringsAsFactors = FALSE
     ),
     stats = c(
-      LogLik = -best_res$value,
-      AIC    = 2 * k + 2 * best_res$value,
-      BIC    = k * log(length(x_obs)) + 2 * best_res$value
+      LogLik = calc_loglik,
+      AIC    = calc_aic,
+      BIC    = calc_bic
     ),
     optimizer = best_res$method
   ))
 }
+
+# ==============================================================================
+# --- USER SECTION ---
+# ==============================================================================
+
+# 1. Real Data Application using Aarset (1987) lifetime data
+data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+          2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+          1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+          2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+          1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+          2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+          1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+          3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+          1.757, 2.324, 3.376, 4.663)
+
+# 2. Set up a mathematically valid scheme where sum(R) < length(x_obs)
+scheme <- c(8, rep(0, 11)) # Example scheme matching m = 12 failures
+sorted_data <- sort(data)
+obs_data <- sorted_data[1:12]
+
+# 3. User Defined Distribution Functions (PDF & CDF Formulas)
+user_pdf <- function(x, par) {
+  (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+}
+
+user_cdf <- function(x, par) {
+  1 - exp(-(x/par[1])^par[2])
+}
+
+# 4. Analysis Execution
+res <- pffcs(x_obs = obs_data,
+             R = scheme,
+             par_start = c(2, 2),
+             pdf_f = user_pdf,
+             cdf_f = user_cdf,
+             opt_method = "auto") # Set to "auto" to see comparison and automatic selection
+
+# Print Results
+print(res$estimates)

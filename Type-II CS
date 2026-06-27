@@ -1,8 +1,8 @@
 # ==============================================================================
-# --- TYPE-II INFERENCE FUNCTION ---
+# --- Inference for  Type-II Censoring Schemes ---
 # ==============================================================================
 
-#' Maximum Likelihood Estimation for Traditional Type-II Censoring Schemes
+#' @title Inference for  Type-II Censoring Schemes
 #'
 #' @description
 #' `ttcs` Computes the Maximum Likelihood Estimates (MLE), variances,
@@ -25,11 +25,10 @@
 #' @param censoring A character string defining the censoring architecture. Must be one of `"left"`, `"right"`, or `"double"`. Default is `"double"`.
 #' @param optimizer A character string selecting the optimization strategy. If set to `"auto"`, all available global metaheuristics are evaluated. Default is `"auto"`.
 #'
-#' @value
-#' A named `list` containing the following components:
-#' \item{estimates}{A \code{data.frame} containing the estimated parameter values (\code{Estimate}), asymptotic variances (\code{Variance}), standard errors (\code{StdError}), 95\% Wald-type confidence intervals (\code{CI_Lower}, \code{CI_Upper}), the name of the winning global algorithm (\code{Selected_Method}), as well as fit statistics (\code{LogLik}, \code{AIC}, \code{BIC}).}
-#' \item{stats}{A named numeric vector reporting the minimized Negative Log-Likelihood (\code{LogLik}), Akaike Information Criterion (\code{AIC}), and Bayesian Information Criterion (\code{BIC}).}
-#' \item{optimizer}{A character string returning the exact method name of the optimal chosen optimizer.}
+#' @return A list containing three distinct components:
+#' * **estimates**: A data frame displaying the estimated parameters, their variances, standard errors, 95\% asymptotic confidence intervals, the specific optimization method that yielded the best result, and fit statistics.
+#' * **stats**: A named numeric vector containing the maximized Log-Likelihood value (`LogLik`), Akaike Information Criterion (`AIC`), and Bayesian Information Criterion (`BIC`).
+#' * **optimizer**: A character string stating the name of the best-performing optimization algorithm.
 #'
 #' @importFrom GA ga
 #' @importFrom DEoptim DEoptim DEoptim.control
@@ -39,111 +38,44 @@
 #'
 #' @examples
 #' # Example using a standard two-parameter Weibull distribution
-#' my_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481)
+#' my_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+#'              2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+#'              1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+#'              2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+#'              1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+#'              2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+#'              1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+#'              3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+#'              1.757, 2.324, 3.376, 4.663)
 #'
 #' # Define PDF and CDF in the User Section
-#' weibull_pdf <- function(x, par) {
+#' user_pdf <- function(x, par) {
 #'    (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
 #' }
-#' weibull_cdf <- function(x, par) {
+#' user_cdf <- function(x, par) {
 #'    1 - exp(-(x/par[1])^par[2])
 #' }
 #'
 #' # Run the Type-II Censoring Inference
 #' result <- ttcs(x = my_data,
-#'                 par_start = c(1.0, 1.0),
-#'                 pdf_f = weibull_pdf,
-#'                 cdf_f = weibull_cdf,
-#'                 r1 = 1,
-#'                 r2 = 1,
-#'                 censoring = "double",
-#'                 optimizer = "auto")
+#'                  par_start =  c(.2,.2),
+#'                  pdf_f = user_pdf,
+#'                  cdf_f = user_cdf,
+#'                  r1 = 1,
+#'                  r2 = 1,
+#'                  censoring = "double",
+#'                  optimizer = "auto")
 #'
 #' print(result$estimates)
 #'
+#' @references
+#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. *IEEE Transactions on Reliability*, 36(1), 106-108.
+#'
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). *Weibull models*. John Wiley & Sons.
+#'
+#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). An innovative family in the lifetime distribution field with applications to real and simulated data. *PLOS ONE*, 15(10), e0238746.
+#'
 #' @export
-#'
-#'
-
-# ==============================================================================
-# --- TYPE-II CENSORING MLE INFERENCE
-# ==============================================================================
-libs <- c("GA", "DEoptim", "metaheuristicOpt", "pso", "MASS", "numDeriv")
-
-new_libs <- libs[!(libs %in% installed.packages()[,"Package"])]
-if(length(new_libs)) install.packages(new_libs)
-
-invisible(lapply(libs, library, character.only = TRUE))
-
-
-sim_dist <- function(n, true_par, cdf_fun) {
-  u <- stats::runif(n)
-
-  sapply(u, function(ui)
-    tryCatch(
-      stats::uniroot(function(x) cdf_fun(x, true_par) - ui,
-                     c(1e-7, 1e5))$root,
-      error = function(e) NA
-    )
-  )
-}
-
-run_opt <- function(m, nll, start, low, upp, iter, k) {
-
-  tryCatch({
-
-    sol <- switch(
-      m,
-
-      GA = GA::ga(
-        type = "real-valued",
-        fitness = function(p) -nll(p),
-        lower = low,
-        upper = upp,
-        maxiter = iter,
-        run = 30,
-        monitor = FALSE
-      )@solution[1, ],
-
-      DE = DEoptim::DEoptim(
-        fn = nll,
-        lower = low,
-        upper = upp,
-        control = DEoptim::DEoptim.control(
-          trace = FALSE,
-          itermax = iter
-        )
-      )$optim$bestmem,
-
-      PSO = pso::psoptim(
-        par = start,
-        fn = nll,
-        lower = low,
-        upper = ub,
-        control = list(maxit = iter)
-      )$par,
-
-      GWO = metaheuristicOpt::GWO(nll, k, low, upp, max_iter = iter)$Best_P,
-      WOA = metaheuristicOpt::WOA(nll, k, low, upp, max_iter = iter)$Best_P,
-      MFO = metaheuristicOpt::MFO(nll, k, low, upp, max_iter = iter)$Best_P,
-      SCA = metaheuristicOpt::SCA(nll, k, low, upp, max_iter = iter)$Best_P,
-      BA  = metaheuristicOpt::BA(nll, k, low, upp, max_iter = iter)$Best_P,
-      BHO = metaheuristicOpt::BHO(nll, k, low, upp, max_iter = iter)$Best_P,
-      COA = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "COA", max_iter = iter)$Best_P,
-      CLG = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "CLG", max_iter = iter)$Best_P,
-
-      stop("Unknown optimizer")
-    )
-
-    stats::optim(
-      par = sol,
-      fn = nll,
-      method = "BFGS",
-      hessian = TRUE
-    )
-  }, error = function(e) NULL)
-}
-
 ttcs <- function(x,
                  par_start,
                  pdf_f,
@@ -258,15 +190,7 @@ ttcs <- function(x,
 
   for(m in methods) {
 
-    res <- run_opt(
-      m,
-      nll,
-      log(par_start),
-      rep(-10, k),
-      rep(10, k),
-      100,
-      k
-    )
+    res <- run_opt(m, nll, log(par_start), rep(-10, k), rep(10, k), 100, k)
 
     if(!is.null(res) && is.finite(res$value)) {
 
@@ -322,7 +246,7 @@ ttcs <- function(x,
     cat("========================================\n\n")
   }
 
-  # İstatistiksel değerleri önceden hesapla
+
   calculated_loglik <- -best$value
   calculated_aic <- 2 * k + 2 * best$value
   calculated_bic <- k * log(length(idx)) + 2 * best$value
@@ -335,7 +259,7 @@ ttcs <- function(x,
       CI_Lower        = best$par - 1.96 * se,
       CI_Upper        = best$par + 1.96 * se,
       Selected_Method = best$method,
-      LogLik          = calculated_loglik,  # Log-Likelihood eklendi
+      LogLik          = calculated_loglik,
       stringsAsFactors = FALSE
     ),
 
@@ -347,46 +271,74 @@ ttcs <- function(x,
   ))
 }
 
-
 # ==============================================================================
-# --- USER SECTION ---
+# --- INTERNAL HELPER FUNCTIONS (NOT EXPORTED) ---
 # ==============================================================================
 
-# 1. Data Definition
-user_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
-               2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
-               1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
-               2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
-               1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
-               2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
-               1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
-               3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
-               1.757, 2.324, 3.376, 4.663)
+sim_dist <- function(n, true_par, cdf_fun) {
+  u <- stats::runif(n)
 
-sorted_data <- sort(user_data)
-obs_data    <- sorted_data[1:15] # Subset of observed data to be analyzed
-
-# 2. Parameter Initial Values (Starting Points)
-user_par_start <- c(.2,.2)
-
-# 3. PDF and CDF Functions
-user_pdf <- function(x, par) {
-  (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+  sapply(u, function(ui)
+    tryCatch(
+      stats::uniroot(function(x) cdf_fun(x, true_par) - ui,
+                     c(1e-7, 1e5))$root,
+      error = function(e) NA
+    )
+  )
 }
 
-user_cdf <- function(x, par) {
-  1 - exp(-(x/par[1])^par[2])
+run_opt <- function(m, nll, start, low, upp, iter, k) {
+
+  tryCatch({
+
+    sol <- switch(
+      m,
+
+      GA = GA::ga(
+        type = "real-valued",
+        fitness = function(p) -nll(p),
+        lower = low,
+        upper = upp,
+        maxiter = iter,
+        run = 30,
+        monitor = FALSE
+      )@solution[1, ],
+
+      DE = DEoptim::DEoptim(
+        fn = nll,
+        lower = low,
+        upper = upp,
+        control = DEoptim::DEoptim.control(
+          trace = FALSE,
+          itermax = iter
+        )
+      )$optim$bestmem,
+
+      PSO = pso::psoptim(
+        par = start,
+        fn = nll,
+        lower = low,
+        upper = upp,
+        control = list(maxit = iter)
+      )$par,
+
+      GWO = metaheuristicOpt::GWO(nll, k, low, upp, max_iter = iter)$Best_P,
+      WOA = metaheuristicOpt::WOA(nll, k, low, upp, max_iter = iter)$Best_P,
+      MFO = metaheuristicOpt::MFO(nll, k, low, upp, max_iter = iter)$Best_P,
+      SCA = metaheuristicOpt::SCA(nll, k, low, upp, max_iter = iter)$Best_P,
+      BA  = metaheuristicOpt::BA(nll, k, low, upp, max_iter = iter)$Best_P,
+      BHO = metaheuristicOpt::BHO(nll, k, low, upp, max_iter = iter)$Best_P,
+      COA = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "COA", max_iter = iter)$Best_P,
+      CLG = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "CLG", max_iter = iter)$Best_P,
+
+      stop("Unknown optimizer")
+    )
+
+    stats::optim(
+      par = sol,
+      fn = nll,
+      method = "BFGS",
+      hessian = TRUE
+    )
+  }, error = function(e) NULL)
 }
-
-# --- EXECUTE INFERENCE ---
-res <- ttcs(x = obs_data,
-            par_start = user_par_start,
-            pdf_f = user_pdf,
-            cdf_f = user_cdf,
-            r1 = 2,
-            r2 = 3,
-            censoring = "double",
-            optimizer = "auto")
-
-# --- RESULTS OUTPUT ---
-print(res$estimates)

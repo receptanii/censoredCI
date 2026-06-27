@@ -1,0 +1,219 @@
+# ==============================================================================
+# --- Inference for Progressive First Failure Censoring Schemes ---
+# ==============================================================================
+
+#' @title Inference for Progressive First Failure Censoring Schemes
+#'
+#' @description `pffcs` computes the Maximum Likelihood Estimates (MLE), variances,
+#' standard errors, and asymptotic 95\% confidence intervals for the parameters
+#' of any user-defined lifetime distribution under a Progressive First-Failure
+#' Censoring scheme.
+#'
+#' @details The function transforms parameters into the logarithmic scale during
+#' optimization to ensure positivity constraints. Standard errors are computed
+#' using the inverse of the Hessian matrix, with a fallback to the Moore-Penrose
+#' pseudoinverse if inversion fails.
+#'
+#' @param x_obs A numeric vector containing the completely observed failure times (ordered observations).
+#' @param R A non-negative integer vector specifying the progressive censoring scheme (number of units removed at each failure time). Must have the same length as \code{x_obs}.
+#' @param par_start A numeric vector of initial parameter values for the optimization process.
+#' @param pdf_f A user-defined function calculating the Probability Density Function (PDF) of the distribution. Must accept arguments \code{(x, par)}.
+#' @param cdf_f A user-defined function calculating the Cumulative Distribution Function (CDF) of the distribution. Must accept arguments \code{(x, par)}.
+#' @param opt_method A character string specifying the optimization method. Options include \code{"auto"} (runs all available algorithms), \code{"BFGS"}, \code{"GA"}, \code{"DE"}, \code{"PSO"}, etc. Default is \code{"auto"}.
+#' @param maxiter An integer indicating the maximum number of iterations or generations for the meta-heuristic optimizers. Default is \code{200}.
+#'
+#' @return A list containing three distinct components:
+#' * **estimates**: A data frame displaying the estimated parameters, their variances, standard errors, 95\% asymptotic confidence intervals, the specific optimization method that yielded the best result, and fit statistics.
+#' * **stats**: A named numeric vector containing the maximized Log-Likelihood value (\code{LogLik}), Akaike Information Criterion (\code{AIC}), and Bayesian Information Criterion (\code{BIC}).
+#' * **optimizer**: A character string stating the name of the best-performing optimization algorithm.
+#'
+#' @importFrom GA ga
+#' @importFrom DEoptim DEoptim DEoptim.control
+#' @importFrom pso psoptim
+#' @importFrom MASS ginv
+#' @importFrom stats optim na.omit runif uniroot
+#'
+#' @examples
+#' # Example using a standard two-parameter Weibull distribution
+#' my_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+#'              2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+#'              1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+#'              2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+#'              1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+#'              2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+#'              1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+#'              3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+#'              1.757, 2.324, 3.376, 4.663)
+#'
+#' # Define PDF and CDF in the User Section
+#' user_pdf <- function(x, par) {
+#'    (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+#' }
+#' user_cdf <- function(x, par) {
+#'    1 - exp(-(x/par[1])^par[2])
+#' }
+#'
+#' user_scheme <- c(2, 0, 1, 0, 0, 3, 0, 0, 1, 0, 1, 0)
+#' sorted_data <- sort(my_data)
+#' obs_data    <- sorted_data[1:12]
+#' user_par_start <- c(2,3)
+#'
+#' # Run the Progressive First Failure Censoring Inference
+#' result <- pffcs(x_obs      = obs_data,
+#'                 R          = user_scheme,
+#'                 par_start  = user_par_start,
+#'                 pdf_f      = user_pdf,
+#'                 cdf_f      = user_cdf,
+#'                 opt_method = "auto")
+#'
+#' print(result$estimates)
+#'
+#' @references
+#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. *IEEE Transactions on Reliability*, 36(1), 106-108.
+#'
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). *Weibull models*. John Wiley & Sons.
+#'
+#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). An innovative family in the lifetime distribution field with applications to real and simulated data. *PLOS ONE*, 15(10), e0238746.
+#'
+#' @export
+pffcs <- function(x_obs, R, par_start, pdf_f, cdf_f, opt_method = "auto", maxiter = 200) {
+
+  if(!is.numeric(x_obs) || length(x_obs) == 0)
+    stop("ERROR: 'x_obs' must be a non-empty numeric vector.")
+
+  if(!is.numeric(par_start) || length(par_start) == 0)
+    stop("ERROR: 'par_start' must be a non-empty numeric vector.")
+
+  if(!is.function(pdf_f))
+    stop("ERROR: 'pdf_f' must be a function.")
+
+  if(!is.function(cdf_f))
+    stop("ERROR: 'cdf_f' must be a function.")
+
+  if(!is.numeric(R) || length(R) != length(x_obs) || any(R < 0) || any(R != floor(R)))
+    stop("ERROR: 'R' must be a non-negative integer vector of the same length as 'x_obs'.")
+
+  if(sum(R) >= length(x_obs))
+    stop("ERROR: sum(R) must be less than the total number of observations.")
+
+  if(any(x_obs <= 0))
+    warning("WARNING: Data contains zero or negative values. This may cause issues for some distributions.")
+
+  if(length(x_obs) < 10)
+    warning("WARNING: Sample size is very small (n < 10). Estimates may not be reliable.")
+
+  if(length(par_start) == 1)
+    warning("WARNING: Single parameter distribution detected. Please verify 'par_start' is correct.")
+
+  k <- length(par_start)
+  eps <- 1e-12
+  lb <- rep(-10, k)
+  ub <- rep(10, k)
+
+  nll <- function(par) {
+    th <- par
+    f  = pmax(pdf_f(x_obs, th), eps)
+    S  = pmax(1 - cdf_f(x_obs, th), eps)
+    ll <- sum(log(f)) + sum(R * log(S))
+    if (!is.finite(ll)) return(1e12)
+    return(-ll)
+  }
+
+  run_opt <- function(m) {
+    tryCatch({
+      sol <- if (m %in% c("BFGS", "Nelder-Mead")) log(par_start) else {
+        switch(m,
+               GA  = GA::ga("real-valued", function(p) -nll(p), lb, ub,
+                            maxiter = maxiter, monitor = FALSE)@solution[1,],
+               DE  = DEoptim::DEoptim(nll, lb, ub,
+                                      DEoptim::DEoptim.control(trace = FALSE, itermax = maxiter))$optim$bestmem,
+               PSO = pso::psoptim(log(par_start), nll, lower = lb, upper = ub,
+                                  control = list(maxit = maxiter))$par,
+               GWO = metaheuristicOpt::GWO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               WOA = metaheuristicOpt::WOA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               MFO = metaheuristicOpt::MFO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               SCA = metaheuristicOpt::SCA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               BA  = metaheuristicOpt::BA(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               BHO = metaheuristicOpt::BHO(nll, k, lb, ub, max_iter = maxiter)$Best_P,
+               metaheuristicOpt::metaOpt(nll, k, lb, ub, algorithm = m, max_iter = maxiter)$Best_P
+        )
+      }
+      if (k == 1) stats::optim(sol, nll, method = "Brent", lower = lb[1], upper = ub[1], hessian = TRUE)
+      else        stats::optim(sol, nll, method = "BFGS", hessian = TRUE)
+
+    }, error = function(e) NULL)
+  }
+
+  methods <- if (opt_method == "auto")
+    c("BFGS", "GA", "DE", "PSO", "GWO", "WOA", "MFO", "SCA", "BA", "BHO", "COA", "CLG")
+  else opt_method
+
+  best        <- list(value = Inf)
+  all_results <- list()
+
+  for (m in methods) {
+    res <- run_opt(m)
+
+    if (!is.null(res) && is.finite(res$value)) {
+      all_results[[m]] <- data.frame(
+        Method = m,
+        NLL    = round(res$value, 6),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    if (!is.null(res) && is.finite(res$value) && res$value < best$value) {
+      best <- res
+      best$method <- m
+    }
+  }
+
+  if (best$value == Inf) stop("All optimizers failed to converge.")
+
+  if (opt_method == "auto" && length(all_results) > 0) {
+    comparison <- do.call(rbind, all_results)
+    comparison <- comparison[order(comparison$NLL), ]
+    rownames(comparison) <- NULL
+    cat("\n========================================\n")
+    cat("   ALL METHODS COMPARISON\n")
+    cat("========================================\n")
+    print(comparison)
+    cat("----------------------------------------\n")
+    cat(">>> Best method:", best$method, "| NLL:", round(best$value, 6), "\n")
+    cat("========================================\n\n")
+  }
+
+  vcov_mat <- tryCatch(
+    solve(best$hessian),
+    error = function(e) {
+      warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      MASS::ginv(best$hessian)
+    }
+  )
+
+  se <- sqrt(abs(diag(vcov_mat)))
+
+  if(any(se > 10))
+    warning("WARNING: Some standard errors are very large. Estimates may not be reliable. Consider updating 'par_start'.")
+
+  calc_loglik <- -best$value
+  calc_aic    = 2 * k + 2 * best$value
+  calc_bic    = k * log(length(x_obs)) + 2 * best$value
+
+  return(list(
+    estimates = data.frame(
+      Estimate  = best$par,
+      Variance  = se^2,
+      StdError  = se,
+      CI_Lower  = best$par - 1.96 * se,
+      CI_Upper  = best$par + 1.96 * se,
+      Selected_Method = best$method,
+      LogLik    = calc_loglik,
+      stringsAsFactors = FALSE
+    ),
+    stats = c(
+      LogLik = calc_loglik
+    ),
+    optimizer = best$method
+  ))
+}

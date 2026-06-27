@@ -1,0 +1,48 @@
+Package: censoredCI
+Type: Package
+Title: Maximum Likelihood Estimation for Type-II and Progressive Censored Data
+Version: 0.1.0
+Authors@R: c(
+    person(given = "Recep Semih", family = "Tanı", email = "receptani47@gmail.com", role = c("aut", "cre")),
+    person(given = "Fatma Gül", family = "Kaynak", email = "gul3kk@gmail.com", role = "aut"),
+    person(given = "Bahar", family = "Ağırman", email = "baharagirman2019@gmail.com", role = "aut"),
+    person(given = "Sümeyra", family = "Sert", email = "sumeyra.sert@selcuk.edu.tr", role = "aut")
+    )
+Description: Provides maximum likelihood estimation and asymptotic confidence intervals for user-defined lifetime distributions under Type-II, progressive Type-II, and progressive first-failure censoring
+    schemes. The package implements three main functions, `ttcs()` for left, right, and double Type-II censored data, `pttcs()` for progressive
+    Type-II censored data, and `pffcs()` for progressive first-failure censored data. Users provide observed failure times, initial parameter
+    values, relevant censoring information, and user-defined probability density and cumulative distribution functions. For progressive censoring
+    models, the censoring scheme is supplied directly by the user through a numeric vector. The package supports classical local optimization methods
+    such as BFGS and Brent, together with global and population-based
+    metaheuristic algorithms including Genetic Algorithm (GA), Differential
+    Evolution (DE), Particle Swarm Optimization (PSO), Grey Wolf Optimizer
+    (GWO), Whale Optimization Algorithm (WOA), Moth-Flame Optimization
+    (MFO), Sine Cosine Algorithm (SCA), Bat Algorithm (BA), Black Hole
+    Optimization (BHO), Cuckoo Optimization Algorithm (COA), and Clonal
+    Selection Algorithm (CLG). When automatic method selection is requested,
+    candidate algorithms are compared according to their attained negative
+    log-likelihood values and the best-performing method is reported. The
+    package returns parameter estimates, variance estimates, standard errors,
+    asymptotic confidence intervals, log-likelihood value and the selected
+    optimization method.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Imports:
+    DEoptim,
+    GA,
+    MASS,
+    metaheuristicOpt,
+    pso,
+    stats
+Suggests:
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.0.0
+RoxygenNote: 8.0.0
+VignetteBuilder: knitr
+Depends: 
+    R (>= 3.5)

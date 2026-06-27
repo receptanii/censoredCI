@@ -1,0 +1,344 @@
+# ==============================================================================
+# --- Inference for  Type-II Censoring Schemes ---
+# ==============================================================================
+
+#' @title Inference for  Type-II Censoring Schemes
+#'
+#' @description
+#' `ttcs` Computes the Maximum Likelihood Estimates (MLE), variances,
+#' standard errors, and asymptotic 95\% confidence intervals for the parameters
+#' of any user-defined lifetime distribution under a Type-II Censoring scheme.
+#'
+#' @details
+#' The parameters are estimated by maximizing the censored log-likelihood function.
+#' To guarantee that the scale and shape parameters remain strictly positive during
+#' numerical optimization, the internal objective function optimizes the parameters
+#' on the log-scale and maps them back using the exponential function. Standard errors
+#' are derived from the numerical Hessian matrix evaluated at the joint MLEs.
+#'
+#' @param x A numeric vector containing the observed data points.
+#' @param par_start A numeric vector indicating the initial starting values for the parameters.
+#' @param pdf_f A user-defined R function that represents the analytical Probability Density Function (PDF).
+#' @param cdf_f A user-defined R function that represents the analytical Cumulative Distribution Function (CDF).
+#' @param r1 An integer specifying the number of left-censored observations (set to 0 if not left-censored).
+#' @param r2 An integer specifying the number of right-censored observations (set to 0 if not right-censored).
+#' @param censoring A character string defining the censoring architecture. Must be one of `"left"`, `"right"`, or `"double"`. Default is `"double"`.
+#' @param optimizer A character string selecting the optimization strategy. If set to `"auto"`, all available global metaheuristics are evaluated. Default is `"auto"`.
+#'
+#' @return A list containing three distinct components:
+#' * **estimates**: A data frame displaying the estimated parameters, their variances, standard errors, 95\% asymptotic confidence intervals, the specific optimization method that yielded the best result, and fit statistics.
+#' * **stats**: A named numeric vector containing the maximized Log-Likelihood value (`LogLik`), Akaike Information Criterion (`AIC`), and Bayesian Information Criterion (`BIC`).
+#' * **optimizer**: A character string stating the name of the best-performing optimization algorithm.
+#'
+#' @importFrom GA ga
+#' @importFrom DEoptim DEoptim DEoptim.control
+#' @importFrom pso psoptim
+#' @importFrom MASS ginv
+#' @importFrom stats optim na.omit runif uniroot
+#'
+#' @examples
+#' # Example using a standard two-parameter Weibull distribution
+#' my_data <- c(0.040, 1.866, 2.385, 3.443, 0.301, 1.876, 2.481, 3.467, 0.309, 1.899,
+#'              2.610, 3.478, 0.557, 1.911, 2.625, 3.578, 0.943, 1.912, 2.632, 3.595,
+#'              1.070, 1.914, 2.646, 3.699, 1.124, 1.981, 2.661, 3.779, 1.248, 2.010,
+#'              2.688, 3.924, 1.281, 2.038, 2.823, 4.035, 1.281, 2.085, 2.890, 4.121,
+#'              1.303, 2.089, 2.902, 4.167, 1.432, 2.097, 2.934, 4.240, 1.480, 2.135,
+#'              2.962, 4.255, 1.505, 2.154, 2.964, 4.278, 1.506, 2.190, 3.000, 4.305,
+#'              1.568, 2.194, 3.103, 4.376, 1.615, 2.223, 3.114, 4.449, 1.619, 2.224,
+#'              3.117, 4.485, 1.652, 2.229, 3.166, 4.570, 1.652, 2.300, 3.344, 4.602,
+#'              1.757, 2.324, 3.376, 4.663)
+#'
+#' # Define PDF and CDF in the User Section
+#' user_pdf <- function(x, par) {
+#'    (par[2]/par[1]) * (x/par[1])^(par[2]-1) * exp(-(x/par[1])^par[2])
+#' }
+#' user_cdf <- function(x, par) {
+#'    1 - exp(-(x/par[1])^par[2])
+#' }
+#'
+#' # Run the Type-II Censoring Inference
+#' result <- ttcs(x = my_data,
+#'                  par_start =  c(.2,.2),
+#'                  pdf_f = user_pdf,
+#'                  cdf_f = user_cdf,
+#'                  r1 = 1,
+#'                  r2 = 1,
+#'                  censoring = "double",
+#'                  optimizer = "auto")
+#'
+#' print(result$estimates)
+#'
+#' @references
+#' Aarset, M. V. (1987). How to identify a bathtub hazard rate. *IEEE Transactions on Reliability*, 36(1), 106-108.
+#'
+#' Murthy, D. P., Xie, M., & Jiang, R. (2004). *Weibull models*. John Wiley & Sons.
+#'
+#' Ijaz, M., Mashwani, W. K., & Belhaouari, S. B. (2020). An innovative family in the lifetime distribution field with applications to real and simulated data. *PLOS ONE*, 15(10), e0238746.
+#'
+#' @export
+ttcs <- function(x,
+                 par_start,
+                 pdf_f,
+                 cdf_f,
+                 r1,
+                 r2,
+                 censoring = "double",
+                 optimizer = "auto") {
+
+  # ============================================================================
+  # INPUT CHECKS
+  # ============================================================================
+
+  if(!is.numeric(x) || length(x) == 0)
+    stop("ERROR: 'x' must be a non-empty numeric vector.")
+
+  if(!is.numeric(par_start) || length(par_start) == 0)
+    stop("ERROR: 'par_start' must be a non-empty numeric vector.")
+
+  if(!is.function(pdf_f))
+    stop("ERROR: 'pdf_f' must be specified as a function.")
+
+  if(!is.function(cdf_f))
+    stop("ERROR: 'cdf_f' must be specified as a function.")
+
+  if(!is.numeric(r1) || r1 < 0 || r1 != floor(r1))
+    stop("ERROR: 'r1' must be a non-negative integer.")
+
+  if(!is.numeric(r2) || r2 < 0 || r2 != floor(r2))
+    stop("ERROR: 'r2' must be a non-negative integer.")
+
+  if(!censoring %in% c("left", "right", "double"))
+    stop("ERROR: 'censoring' must be one of 'left', 'right', or 'double'.")
+
+  x <- sort(stats::na.omit(x))
+  n0 <- length(x)
+  k  = length(par_start)
+
+  if(r1 + r2 >= n0)
+    stop("ERROR: r1 + r2 must be less than the total number of observations (r1 + r2 < n).")
+
+  if(censoring == "left" && r1 == 0)
+    warning("WARNING: censoring='left' selected but r1=0. No censoring is applied.")
+
+  if(censoring == "right" && r2 == 0)
+    warning("WARNING: censoring='right' selected but r2=0. No censoring is applied.")
+
+  if(censoring == "double" && r1 == 0 && r2 == 0)
+    warning("WARNING: censoring='double' selected but r1=0 and r2=0. No censoring is applied.")
+
+  if(any(x <= 0))
+    warning("WARNING: Data contains zero or negative values. This may cause issues for some distributions.")
+
+  if(n0 < 10)
+    warning("WARNING: Sample size is very small (n < 10). Estimates may not be reliable.")
+
+  if(length(par_start) == 1)
+    warning("WARNING: Single parameter distribution detected. Please verify 'par_start' is correct.")
+
+  # ============================================================================
+
+  idx <- switch(
+    censoring,
+    "left"   = (r1 + 1):n0,
+    "right"  = 1:(n0 - r2),
+    "double" = (r1 + 1):(n0 - r2)
+  )
+
+  nll <- function(par) {
+
+    p_exp <- par
+    eps <- 1e-12
+    dens <- pdf_f(x[idx], p_exp)
+
+    if(any(!is.finite(dens)) || any(dens <= 0)) {
+      return(1e10)
+    }
+
+    ll <- sum(log(pmax(dens, eps)))
+
+    if(r1 > 0 && censoring != "right") {
+
+      left_cdf <- cdf_f(x[r1 + 1], p_exp)
+
+      if(!is.finite(left_cdf) || left_cdf <= 0 || left_cdf >= 1) {
+        return(1e10)
+      }
+
+      ll <- ll + r1 * log(pmax(left_cdf, eps))
+    }
+
+    if(r2 > 0 && censoring != "left") {
+
+      right_surv <- 1 - cdf_f(x[n0 - r2], p_exp)
+
+      if(!is.finite(right_surv) || right_surv <= 0 || right_surv >= 1) {
+        return(1e10)
+      }
+
+      ll <- ll + r2 * log(pmax(right_surv, eps))
+    }
+
+    return(-ll)
+  }
+
+  methods <- if(optimizer == "auto")
+    c("GA", "DE", "PSO", "GWO", "WOA", "MFO", "SCA", "BA", "BHO", "COA", "CLG")
+  else optimizer
+
+  best <- list(value = Inf)
+  all_results <- list()
+
+  for(m in methods) {
+
+    res <- run_opt(m, nll, log(par_start), rep(-10, k), rep(10, k), 100, k)
+
+    if(!is.null(res) && is.finite(res$value)) {
+
+      all_results[[m]] <- data.frame(
+        Method = m,
+        NLL = round(res$value, 6),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    if(!is.null(res) &&
+       is.finite(res$value) &&
+       res$value < best$value) {
+
+      best <- res
+      best$method <- m
+    }
+  }
+
+  if(best$value == Inf) {
+    stop("All optimizers failed to converge.")
+  }
+
+  # ============================================================================
+  # SAFE HESSIAN INVERSION
+  # ============================================================================
+
+  vcov_mat <- tryCatch(
+    solve(best$hessian),
+    error = function(e) {
+      warning("WARNING: Hessian could not be inverted, using Moore-Penrose pseudoinverse. Standard errors may be approximate.")
+      MASS::ginv(best$hessian)
+    }
+  )
+
+  se <- sqrt(abs(diag(vcov_mat)))
+
+  if(any(se > 10))
+    warning("WARNING: Some standard errors are very large. Estimates may not be reliable. Consider updating 'par_start'.")
+
+  if(optimizer == "auto" && length(all_results) > 0) {
+
+    comparison <- do.call(rbind, all_results)
+    comparison <- comparison[order(comparison$NLL), ]
+    rownames(comparison) <- NULL
+
+    cat("\n========================================\n")
+    cat("   ALL METHODS COMPARISON\n")
+    cat("========================================\n")
+    print(comparison)
+    cat("----------------------------------------\n")
+    cat(">>> Best method:", best$method, "| NLL:", round(best$value, 6), "\n")
+    cat("========================================\n\n")
+  }
+
+
+  calculated_loglik <- -best$value
+  calculated_aic <- 2 * k + 2 * best$value
+  calculated_bic <- k * log(length(idx)) + 2 * best$value
+
+  return(list(
+    estimates = data.frame(
+      Estimate        = best$par,
+      Variance        = se^2,
+      StdError        = se,
+      CI_Lower        = best$par - 1.96 * se,
+      CI_Upper        = best$par + 1.96 * se,
+      Selected_Method = best$method,
+      LogLik          = calculated_loglik,
+      stringsAsFactors = FALSE
+    ),
+
+    stats = c(
+      LogLik = calculated_loglik
+    ),
+
+    optimizer = best$method
+  ))
+}
+
+# ==============================================================================
+# --- INTERNAL HELPER FUNCTIONS (NOT EXPORTED) ---
+# ==============================================================================
+
+sim_dist <- function(n, true_par, cdf_fun) {
+  u <- stats::runif(n)
+
+  sapply(u, function(ui)
+    tryCatch(
+      stats::uniroot(function(x) cdf_fun(x, true_par) - ui,
+                     c(1e-7, 1e5))$root,
+      error = function(e) NA
+    )
+  )
+}
+
+run_opt <- function(m, nll, start, low, upp, iter, k) {
+
+  tryCatch({
+
+    sol <- switch(
+      m,
+
+      GA = GA::ga(
+        type = "real-valued",
+        fitness = function(p) -nll(p),
+        lower = low,
+        upper = upp,
+        maxiter = iter,
+        run = 30,
+        monitor = FALSE
+      )@solution[1, ],
+
+      DE = DEoptim::DEoptim(
+        fn = nll,
+        lower = low,
+        upper = upp,
+        control = DEoptim::DEoptim.control(
+          trace = FALSE,
+          itermax = iter
+        )
+      )$optim$bestmem,
+
+      PSO = pso::psoptim(
+        par = start,
+        fn = nll,
+        lower = low,
+        upper = upp,
+        control = list(maxit = iter)
+      )$par,
+
+      GWO = metaheuristicOpt::GWO(nll, k, low, upp, max_iter = iter)$Best_P,
+      WOA = metaheuristicOpt::WOA(nll, k, low, upp, max_iter = iter)$Best_P,
+      MFO = metaheuristicOpt::MFO(nll, k, low, upp, max_iter = iter)$Best_P,
+      SCA = metaheuristicOpt::SCA(nll, k, low, upp, max_iter = iter)$Best_P,
+      BA  = metaheuristicOpt::BA(nll, k, low, upp, max_iter = iter)$Best_P,
+      BHO = metaheuristicOpt::BHO(nll, k, low, upp, max_iter = iter)$Best_P,
+      COA = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "COA", max_iter = iter)$Best_P,
+      CLG = metaheuristicOpt::metaOpt(nll, k, low, upp, algorithm = "CLG", max_iter = iter)$Best_P,
+
+      stop("Unknown optimizer")
+    )
+
+    stats::optim(
+      par = sol,
+      fn = nll,
+      method = "BFGS",
+      hessian = TRUE
+    )
+  }, error = function(e) NULL)
+}
